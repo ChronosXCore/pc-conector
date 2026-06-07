@@ -6,6 +6,7 @@ import ScreenArrangement from './ScreenArrangement'
 import ServicesPanel from './ServicesPanel'
 import AudioPanel from './AudioPanel'
 import SettingsPanel from './SettingsPanel'
+import LinkedDevicesPanel from './LinkedDevicesPanel'
 import type { AudioDevice, AppConfig, Tab, DiscoveredDevice } from './types'
 import ShareModal from './ShareModal'
 import NetworkStatsPanel from './NetworkStatsPanel'
@@ -33,7 +34,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard')
   const [connected, setConnected] = useState(false)
   const [connectedPeers, setConnectedPeers] = useState<string[]>([])
-  // mDNS peers are strings; free discovery peers are DiscoveredDevice
   const [mDnsPeers, setMDnsPeers] = useState<string[]>([])
   const [freePeers, setFreePeers] = useState<DiscoveredDevice[]>([])
   const [isFreeSearch, setIsFreeSearch] = useState(false)
@@ -46,13 +46,9 @@ export default function App() {
   const [shareTargetIp, setShareTargetIp] = useState('')
   const [connectingAddr, setConnectingAddr] = useState<string | null>(null)
 
-  // Detect current theme from DOM
-  const getCurrentTheme = () =>
-    document.documentElement.getAttribute('data-theme') as 'dark' | 'light' | null
-
   const [isDark, setIsDark] = useState(() => {
     const t = document.documentElement.getAttribute('data-theme')
-    return t !== 'light' // default dark
+    return t !== 'light'
   })
 
   useEffect(() => {
@@ -64,14 +60,12 @@ export default function App() {
     const next = isDark ? 'light' : 'dark'
     setIsDark(!isDark)
     document.documentElement.setAttribute('data-theme', next)
-    // Persist to config if available
     if (config) {
       const updated = { ...config, general: { ...config.general, theme: next } }
       invoke('update_config', { config: updated }).catch(console.error)
     }
   }
 
-  // Dynamic theme management
   useEffect(() => {
     if (!config?.general?.theme) return
     const theme = config.general.theme
@@ -108,33 +102,22 @@ export default function App() {
     try {
       setIsSearching(true)
       setStatusMessage('Buscando dispositivos en la red...')
-      
-      const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-      
+      const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
       if (isFreeSearch) {
-        // Ejecutar la llamada Tauri y el retraso artificial en paralelo para mostrar la animación
         const [found] = await Promise.all([
           invoke<DiscoveredDevice[]>('start_free_discovery'),
           delay(1800)
-        ]);
+        ])
         setFreePeers(found)
         setMDnsPeers([])
         setIsSearching(false)
-        if (found.length > 0) {
-          setStatusMessage(`Se encontraron ${found.length} dispositivo(s) en la red (ARP)`)
-        } else {
-          setStatusMessage('No se encontraron dispositivos en la tabla ARP.')
-        }
+        setStatusMessage(found.length > 0 ? `Se encontraron ${found.length} dispositivo(s) en la red (ARP)` : 'No se encontraron dispositivos en la tabla ARP.')
       } else {
         const found = await invoke<string[]>('start_discovery')
         setMDnsPeers(found)
         setFreePeers([])
         setIsSearching(false)
-        if (found.length > 0) {
-          setStatusMessage(`Se encontraron ${found.length} PC(s) en la red (mDNS)`)
-        } else {
-          setStatusMessage('No se encontraron PCs con mDNS. Intenta "Búsqueda libre" o Conexión Manual.')
-        }
+        setStatusMessage(found.length > 0 ? `Se encontraron ${found.length} PC(s) en la red (mDNS)` : 'No se encontraron PCs con mDNS. Intenta "Búsqueda libre" o Conexión Manual.')
       }
     } catch (e) {
       setIsSearching(false)
@@ -143,7 +126,7 @@ export default function App() {
   }
 
   const handleConnect = async (addr: string) => {
-    const targetAddr = addr.split(' - ')[1] || addr;
+    const targetAddr = addr.split(' - ')[1] || addr
     try {
       setConnectingAddr(targetAddr)
       setStatusMessage(`Conectando a ${targetAddr}...`)
@@ -160,11 +143,30 @@ export default function App() {
   const handleDisconnectFromPeer = async (addr: string) => {
     try {
       setStatusMessage(`Desconectando de ${addr}...`)
-      await invoke('disconnect_from_peer', { addr })
+      const fullAddr = connectedPeers.find(p => p.startsWith(addr)) || addr
+      await invoke('disconnect_from_peer', { addr: fullAddr })
       await checkConnection()
       setStatusMessage(`Desconectado de ${addr}`)
     } catch (e) {
       setStatusMessage(`Error al desconectar de ${addr}: ${e}`)
+    }
+  }
+
+  const handleLinkDevice = async (ip: string, name: string) => {
+    try {
+      await invoke('link_device', { ip, name })
+      setStatusMessage(`Dispositivo vinculado: ${name} (${ip})`)
+    } catch (e) {
+      setStatusMessage(`Error al vincular: ${e}`)
+    }
+  }
+
+  const handleUnlinkDevice = async (ip: string) => {
+    try {
+      await invoke('unlink_device', { ip })
+      setStatusMessage(`Dispositivo desvinculado: ${ip}`)
+    } catch (e) {
+      setStatusMessage(`Error al desvincular: ${e}`)
     }
   }
 
@@ -222,45 +224,35 @@ export default function App() {
             className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
             onClick={() => setActiveTab('dashboard')}
           >
-            <span className="nav-icon">
-              <DashboardIcon />
-            </span>
+            <span className="nav-icon"><DashboardIcon /></span>
             <span>PANEL PRINCIPAL</span>
           </button>
           <button
             className={`nav-item ${activeTab === 'screens' ? 'active' : ''}`}
             onClick={() => setActiveTab('screens')}
           >
-            <span className="nav-icon">
-              <ScreensIcon />
-            </span>
+            <span className="nav-icon"><ScreensIcon /></span>
             <span>PANTALLAS</span>
           </button>
           <button
             className={`nav-item ${activeTab === 'services' ? 'active' : ''}`}
             onClick={() => setActiveTab('services')}
           >
-            <span className="nav-icon">
-              <ServicesIcon />
-            </span>
+            <span className="nav-icon"><ServicesIcon /></span>
             <span>SERVICIOS</span>
           </button>
           <button
             className={`nav-item ${activeTab === 'audio' ? 'active' : ''}`}
             onClick={() => { setActiveTab('audio'); loadAudioDevices() }}
           >
-            <span className="nav-icon">
-              <AudioIcon />
-            </span>
+            <span className="nav-icon"><AudioIcon /></span>
             <span>AUDIO</span>
           </button>
           <button
             className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
             onClick={() => setActiveTab('settings')}
           >
-            <span className="nav-icon">
-              <SettingsIcon />
-            </span>
+            <span className="nav-icon"><SettingsIcon /></span>
             <span>AJUSTES</span>
           </button>
         </nav>
@@ -304,17 +296,16 @@ export default function App() {
               onDiscover={handleDiscover}
               onConnect={handleConnect}
               onDisconnectFromPeer={handleDisconnectFromPeer}
+              onLinkDevice={handleLinkDevice}
+              onUnlinkDevice={handleUnlinkDevice}
               onShareApp={(ip) => {
                 setShareTargetIp(ip)
                 setShareModalOpen(true)
               }}
             />
           )}
-          {activeTab === 'screens' && config && (
-            <ScreenArrangement
-              screens={config.screens}
-              onUpdate={(screens) => handleUpdateConfig({ ...config, screens })}
-            />
+          {activeTab === 'screens' && (
+            <ScreenArrangement />
           )}
           {activeTab === 'services' && config && (
             <ServicesPanel
@@ -339,7 +330,7 @@ export default function App() {
         </div>
       </main>
 
-      <ShareModal 
+      <ShareModal
         isOpen={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
         ipAddress={shareTargetIp}
@@ -348,7 +339,7 @@ export default function App() {
   )
 }
 
-// Helper to pick the right icon for a device type
+// ===== Device icon helper =====
 function DeviceTypeIcon({ deviceType, size = 22 }: { deviceType: string; size?: number }) {
   switch (deviceType) {
     case 'mobile': return <MobileIcon size={size} />
@@ -361,7 +352,6 @@ function DeviceTypeIcon({ deviceType, size = 22 }: { deviceType: string; size?: 
   }
 }
 
-// Helper: get a human-readable label for the device type
 function deviceTypeLabel(t: string): string {
   const map: Record<string, string> = {
     pc: 'PC de escritorio',
@@ -388,6 +378,8 @@ function Dashboard({
   onDiscover,
   onConnect,
   onDisconnectFromPeer,
+  onLinkDevice,
+  onUnlinkDevice,
   onShareApp
 }: {
   connected: boolean
@@ -401,20 +393,67 @@ function Dashboard({
   onDiscover: () => void
   onConnect: (addr: string) => void
   onDisconnectFromPeer: (addr: string) => void
+  onLinkDevice: (ip: string, name: string) => Promise<void>
+  onUnlinkDevice: (ip: string) => Promise<void>
   onShareApp: (ip: string) => void
 }) {
   const [manualIp, setManualIp] = useState('')
+  const [linkedRefreshKey, setLinkedRefreshKey] = useState(0)
   const hasPeers = isFreeSearch ? freePeers.length > 0 : mDnsPeers.length > 0
-
   const isManualConnecting = connectingAddr === manualIp
+
+  const handleLink = async (ip: string, name: string) => {
+    await onLinkDevice(ip, name)
+    setLinkedRefreshKey(k => k + 1)
+  }
+  const handleUnlink = async (ip: string) => {
+    await onUnlinkDevice(ip)
+    setLinkedRefreshKey(k => k + 1)
+  }
 
   return (
     <div className="panel">
       <h2>Panel Principal</h2>
       <p className="panel-subtitle">Conecta dispositivos en tu red local en segundos</p>
 
-      {/* Network stats + IP panel - always visible at top */}
+      {/* Network stats + IP panel */}
       <NetworkStatsPanel />
+
+      {/* Linked trusted devices panel */}
+      <LinkedDevicesPanel
+        key={linkedRefreshKey}
+        connectedPeers={connectedPeers}
+        onConnect={onConnect}
+        onDisconnect={onDisconnectFromPeer}
+        onLink={onLinkDevice}
+        onUnlink={handleUnlink}
+      />
+
+      {/* Connected peers bar */}
+      {connectedPeers.length > 0 && (
+        <div className="connected-peers-bar">
+          <span className="connected-peers-label">
+            <span className="status-dot" style={{ background: 'var(--success)', display: 'inline-block', width: 8, height: 8, borderRadius: '50%', marginRight: 6 }} />
+            {connectedPeers.length} equipo(s) activo(s)
+          </span>
+          <div className="connected-peers-chips">
+            {connectedPeers.map(peer => {
+              const ip = peer.split(':')[0]
+              return (
+                <span key={peer} className="peer-chip">
+                  <LaptopIcon size={12} />
+                  {ip}
+                  <button
+                    className="peer-chip-close"
+                    onClick={() => onDisconnectFromPeer(peer)}
+                    title="Desconectar"
+                  >✕</button>
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="dashboard-hero">
         <div className={`radar-container ${isSearching ? 'scanning' : ''}`}>
@@ -461,7 +500,7 @@ function Dashboard({
             className="manual-input"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && manualIp && !connectingAddr) {
-                onConnect(manualIp);
+                onConnect(manualIp)
               }
             }}
           />
@@ -477,9 +516,7 @@ function Dashboard({
 
       {!hasPeers && !connected && !isSearching && (
         <div className="empty-state">
-          <div className="empty-icon">
-            <InfoIcon size={28} />
-          </div>
+          <div className="empty-icon"><InfoIcon size={28} /></div>
           <p>No se encontraron dispositivos en la red local. Haz clic en el botón de arriba para comenzar a buscar o usa Conexión manual por IP.</p>
         </div>
       )}
@@ -492,7 +529,8 @@ function Dashboard({
             const parts = peer.split(' - ')
             const name = parts[0] || peer
             const addr = parts[1] || peer
-            const isPeerConnected = connectedPeers.includes(addr)
+            const ip = addr.split(':')[0]
+            const isPeerConnected = connectedPeers.some(p => p.startsWith(ip))
             const isThisConnecting = connectingAddr === addr
             return (
               <div key={i} className="peer-card">
@@ -509,7 +547,15 @@ function Dashboard({
                     <span className="peer-address">{addr}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-small btn-link-device"
+                    onClick={() => handleLink(ip, name)}
+                    disabled={!!connectingAddr}
+                    title="Vincular para auto-conexión"
+                  >
+                    Vincular
+                  </button>
                   {isPeerConnected ? (
                     <button className="btn btn-danger btn-small" onClick={() => onDisconnectFromPeer(addr)} disabled={!!connectingAddr}>
                       Desconectar
@@ -531,9 +577,10 @@ function Dashboard({
         <div className="peers-list">
           <h3>Dispositivos en la red local (ARP)</h3>
           {freePeers.map((device, i) => {
-            const isPeerConnected = connectedPeers.includes(device.ip)
+            const isPeerConnected = connectedPeers.some(p => p.startsWith(device.ip))
             const isThisConnecting = connectingAddr === device.ip
             const typeLabel = deviceTypeLabel(device.device_type)
+            const canConnect = device.device_type === 'pc' || device.device_type === 'laptop' || device.device_type === 'unknown'
             return (
               <div key={i} className="peer-card device-card">
                 <div className="peer-info">
@@ -550,12 +597,22 @@ function Dashboard({
                     <span className="peer-address">{device.ip}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: '6px', flexShrink: 0, flexWrap: 'wrap' }}>
+                  {canConnect && (
+                    <button
+                      className="btn btn-small btn-link-device"
+                      onClick={() => handleLink(device.ip, device.hostname)}
+                      disabled={!!connectingAddr}
+                      title="Vincular para auto-conexión"
+                    >
+                      Vincular
+                    </button>
+                  )}
                   <button
                     className="btn btn-small share-btn"
                     onClick={() => onShareApp(device.ip)}
                     disabled={!!connectingAddr}
-                    title="Compartir NetBridge con este dispositivo"
+                    title="Compartir NetBridge"
                   >
                     Compartir
                   </button>
@@ -582,8 +639,8 @@ function Dashboard({
         </p>
         <ul className="help-list">
           <li><strong>Windows Firewall:</strong> Asegúrate de permitir el programa <code>app.exe</code> en redes Privadas.</li>
-          <li><strong>Linux (UFW):</strong> Habilita los puertos de red: <code>sudo ufw allow 9876/udp</code> y <code>sudo ufw allow 5353/udp</code>.</li>
-          <li><strong>IP Directa:</strong> Puedes saltar el descubrimiento escribiendo la IP de la otra PC en el cuadro de arriba "Conexión manual por IP".</li>
+          <li><strong>Linux (UFW):</strong> Ejecuta: <code>sudo ufw allow 9876/udp</code> y <code>sudo ufw allow 5353/udp</code>.</li>
+          <li><strong>IP Directa:</strong> Puedes escribir la IP de la otra PC en "Conexión manual por IP".</li>
         </ul>
       </div>
     </div>

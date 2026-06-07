@@ -20,7 +20,7 @@ export interface AppConfig {
     keyboard_sharing: boolean
     audio_sharing: boolean
   }
-  screens: { id: string; name: string; x: number; y: number; width: number; height: number; is_primary: boolean }[]
+  screens: ScreenInfo[]
   audio: {
     input_device: string | null
     output_device: string | null
@@ -34,7 +34,9 @@ export interface AppConfig {
     auto_reconnect: boolean
     reconnect_interval: number
     encryption_enabled: boolean
+    security_token: string
   }
+  linked_devices: LinkedDevice[]
 }
 
 export type Tab = 'dashboard' | 'screens' | 'services' | 'audio' | 'settings'
@@ -48,3 +50,18 @@ export interface DiscoveredDevice {
   description: string
 }
 
+export interface LinkedDevice {
+  ip: string
+  name: string
+  linked_at: number
+}
+
+export interface ScreenInfo {
+  id: string
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  is_primary: boolean
+}

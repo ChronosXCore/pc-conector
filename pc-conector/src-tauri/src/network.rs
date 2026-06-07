@@ -6,6 +6,18 @@ use std::sync::Arc;
 use serde::{Serialize, Deserialize};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
+/// Screen information shared between peers after connecting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenInfo {
+    pub id: String,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub is_primary: bool,
+}
+
 /// Tipos de mensajes que se pueden enviar entre peers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkMessage {
@@ -15,6 +27,7 @@ pub enum NetworkMessage {
     AudioData(Vec<u8>),
     AudioConfig(AudioStreamConfig),
     PeerInfo(String, String),
+    ScreenLayout(Vec<ScreenInfo>),
     Ping,
     Pong,
 }

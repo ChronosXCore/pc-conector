@@ -10,6 +10,8 @@ pub struct AppConfig {
     pub screens: Vec<ScreenConfig>,
     pub audio: AudioConfig,
     pub connection: ConnectionConfig,
+    #[serde(default)]
+    pub linked_devices: Vec<LinkedDevice>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +61,14 @@ pub struct ConnectionConfig {
     pub security_token: String,
 }
 
+/// A trusted device that has been "linked" for auto-connect
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkedDevice {
+    pub ip: String,
+    pub name: String,
+    pub linked_at: u64, // Unix timestamp seconds
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -91,6 +101,7 @@ impl Default for AppConfig {
                 encryption_enabled: true,
                 security_token: "123456".to_string(),
             },
+            linked_devices: Vec::new(),
         }
     }
 }

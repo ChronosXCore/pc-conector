@@ -1,4 +1,4 @@
-mod audio;
+﻿mod audio;
 mod clipboard;
 mod config;
 mod discovery;
@@ -7,16 +7,16 @@ mod network;
 
 use audio::AudioService;
 use clipboard::ClipboardSync;
-use config::AppConfig;
+use config::{AppConfig, LinkedDevice};
 use discovery::DiscoveryService;
 use input::{InputService, InputEvent};
-use network::{NetworkManager, NetworkMessage};
+use network::{NetworkManager, NetworkMessage, ScreenInfo};
 use log::{info, warn, error};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Manager;
 
-/// Estado global de la aplicación compartido entre comandos Tauri
+/// Estado global de la aplicaciÃ³n compartido entre comandos Tauri
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
@@ -26,6 +26,10 @@ pub struct AppState {
     pub input_service: Arc<Mutex<Option<InputService>>>,
     pub audio_service: Arc<Mutex<Option<AudioService>>>,
     pub discovery: Arc<Mutex<Option<DiscoveryService>>>,
+    /// Screens reported by remote peers: addr -> list of ScreenInfo
+    pub remote_screens: Arc<Mutex<std::collections::HashMap<String, Vec<ScreenInfo>>>>,
+    /// Whether cursor is currently locked to remote (input forwarding active)
+    pub cursor_on_remote: Arc<Mutex<bool>>,
 }
 
 impl AppState {
@@ -38,11 +42,13 @@ impl AppState {
             input_service: Arc::new(Mutex::new(None)),
             audio_service: Arc::new(Mutex::new(None)),
             discovery: Arc::new(Mutex::new(None)),
+            remote_screens: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            cursor_on_remote: Arc::new(Mutex::new(false)),
         }
     }
 }
 
-/// Envía un mensaje de red de forma asyncrónica a todos los peers conectados
+/// EnvÃ­a un mensaje de red de forma asyncrÃ³nica a todos los peers conectados
 fn send_to_all_peers(msg: NetworkMessage, state: &AppState) {
     let conns = state.connections.lock().unwrap().clone();
     for (addr, conn) in conns {
@@ -63,7 +69,7 @@ fn send_to_all_peers(msg: NetworkMessage, state: &AppState) {
                     let _ = send.finish();
                 }
                 Err(e) => {
-                    error!("Error al abrir stream uni para envío a {}: {}", addr, e);
+                    error!("Error al abrir stream uni para envÃ­o a {}: {}", addr, e);
                 }
             }
         });
@@ -71,7 +77,7 @@ fn send_to_all_peers(msg: NetworkMessage, state: &AppState) {
 }
 
 /// Procesa un mensaje de red recibido desde el peer
-fn handle_incoming_message(msg: NetworkMessage, state: &AppState) -> Result<(), String> {
+fn handle_incoming_message(msg: NetworkMessage, state: &AppState, peer_addr: &str) -> Result<(), String> {
     match msg {
         NetworkMessage::Clipboard(text) => {
             info!("Recibido portapapeles remoto: {}", text);
@@ -96,15 +102,19 @@ fn handle_incoming_message(msg: NetworkMessage, state: &AppState) -> Result<(), 
                 }
             }
         }
+        NetworkMessage::ScreenLayout(screens) => {
+            info!("Recibido layout de pantallas de {}: {} pantalla(s)", peer_addr, screens.len());
+            state.remote_screens.lock().unwrap().insert(peer_addr.to_string(), screens);
+        }
         _ => {}
     }
     Ok(())
 }
 
-/// Inicia el bucle receptor de mensajes en segundo plano para una conexión activa, gestionando la autenticación mutua por token
+/// Inicia el bucle receptor de mensajes en segundo plano para una conexiÃ³n activa, gestionando la autenticaciÃ³n mutua por token
 fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is_server: bool) {
     tauri::async_runtime::spawn(async move {
-        info!("Iniciando bucle de recepción para peer {} (servidor: {})...", addr, is_server);
+        info!("Iniciando bucle de recepciÃ³n para peer {} (servidor: {})...", addr, is_server);
         
         let hostname = whoami::fallible::hostname().unwrap_or_else(|_| "PC-Desconocido".to_string());
         let expected_token = state.config.lock().unwrap().connection.security_token.clone();
@@ -122,40 +132,56 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                     if !authenticated {
                         if let NetworkMessage::PeerInfo(peer_host, peer_token) = msg {
                             if peer_token == expected_token {
-                                info!("Autenticación exitosa con {} ({})", peer_host, addr);
+                                info!("AutenticaciÃ³n exitosa con {} ({})", peer_host, addr);
                                 authenticated = true;
                                 
                                 // Si somos el servidor, enviamos nuestras credenciales en respuesta
                                 if is_server {
                                     send_peer_info(&conn, hostname.clone(), expected_token.clone());
                                 }
+                                
+                                // Enviar nuestro layout de pantallas al peer reciÃ©n autenticado
+                                let local_screens = collect_local_screens();
+                                let layout_msg = NetworkMessage::ScreenLayout(local_screens);
+                                let conn_clone = conn.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Ok(bytes) = serde_json::to_vec(&layout_msg) {
+                                        if let Ok(mut send) = conn_clone.open_uni().await {
+                                            let _ = send.write_all(&bytes).await;
+                                            let _ = send.finish();
+                                        }
+                                    }
+                                });
                                 continue;
                             } else {
-                                warn!("Token inválido recibido de {} ({}). Cerrando conexión.", peer_host, addr);
+                                warn!("Token invÃ¡lido recibido de {} ({}). Cerrando conexiÃ³n.", peer_host, addr);
                                 conn.close(0u32.into(), b"Token de seguridad incorrecto");
                                 state.connections.lock().unwrap().remove(&addr);
+                                state.remote_screens.lock().unwrap().remove(&addr);
                                 break;
                             }
                         } else {
                             warn!("Mensaje no autorizado recibido antes de autenticar de {}. Cerrando.", addr);
                             conn.close(0u32.into(), b"No autenticado");
                             state.connections.lock().unwrap().remove(&addr);
+                            state.remote_screens.lock().unwrap().remove(&addr);
                             break;
                         }
                     }
                     
-                    if let Err(e) = handle_incoming_message(msg, &state) {
+                    if let Err(e) = handle_incoming_message(msg, &state, &addr) {
                         error!("Error al procesar mensaje entrante de {}: {}", addr, e);
                     }
                 }
                 Err(e) => {
-                    error!("Conexión de red perdida o error al recibir de {}: {}", addr, e);
+                    error!("ConexiÃ³n de red perdida o error al recibir de {}: {}", addr, e);
                     state.connections.lock().unwrap().remove(&addr);
+                    state.remote_screens.lock().unwrap().remove(&addr);
                     break;
                 }
             }
         }
-        info!("Bucle de recepción para {} finalizado.", addr);
+        info!("Bucle de recepciÃ³n para {} finalizado.", addr);
     });
 }
 
@@ -192,7 +218,7 @@ async fn receive_message_on_conn(conn: &quinn::Connection) -> Result<NetworkMess
 async fn start_discovery(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
     info!("Iniciando descubrimiento de peers...");
     
-    // Si no está iniciado en el arranque (o si fue detenido), lo iniciamos
+    // Si no estÃ¡ iniciado en el arranque (o si fue detenido), lo iniciamos
     let has_discovery = state.discovery.lock().unwrap().is_some();
     if !has_discovery {
         let hostname = whoami::fallible::hostname().unwrap_or_else(|_| "PC-Desconocido".to_string());
@@ -245,7 +271,7 @@ fn configure_system_firewall() {
     {
         info!("Intentando configurar cortafuegos en Linux...");
         
-        // Verificar si ufw está activo
+        // Verificar si ufw estÃ¡ activo
         if std::process::Command::new("ufw").arg("--version").status().is_ok() {
             let status = std::process::Command::new("ufw").arg("status").output();
             if let Ok(out) = status {
@@ -262,7 +288,7 @@ fn configure_system_firewall() {
             }
         }
         
-        // Verificar si firewalld está activo
+        // Verificar si firewalld estÃ¡ activo
         if std::process::Command::new("firewall-cmd").arg("--version").status().is_ok() {
             let status = std::process::Command::new("firewall-cmd").arg("--state").output();
             if let Ok(out) = status {
@@ -703,7 +729,7 @@ fn get_brand_from_mac(mac: &str) -> (String, String) {
                  ("Printer (Epson/Canon/Brother)".to_string(), "printer".to_string())
              }
 
-        _ => ("Dispositivo Genérico".to_string(), "unknown".to_string())
+        _ => ("Dispositivo GenÃ©rico".to_string(), "unknown".to_string())
     }
 }
 
@@ -937,7 +963,7 @@ async fn start_free_discovery() -> Result<Vec<DiscoveredDevice>, String> {
     }
 
     let arp_devices = parse_devices_from_arp_output(&arp_output);
-    info!("Población de tabla ARP completada. Parseados {} dispositivos. Iniciando resolución paralela...", arp_devices.len());
+    info!("PoblaciÃ³n de tabla ARP completada. Parseados {} dispositivos. Iniciando resoluciÃ³n paralela...", arp_devices.len());
 
     let mut device_details = Vec::new();
     let mut resolve_tasks = Vec::new();
@@ -949,7 +975,7 @@ async fn start_free_discovery() -> Result<Vec<DiscoveredDevice>, String> {
             let device_type = guess_device_type_from_hostname(&hostname, &default_type);
 
             // Infer brand from hostname when MAC lookup returns the generic fallback
-            let brand = if mac_brand == "Dispositivo Genérico" {
+            let brand = if mac_brand == "Dispositivo GenÃ©rico" {
                 infer_brand_from_hostname(&hostname)
             } else {
                 mac_brand
@@ -970,9 +996,9 @@ async fn start_free_discovery() -> Result<Vec<DiscoveredDevice>, String> {
 
             // Build a friendly description
             let description = match (hostname == "unknown", brand == "Desconocido") {
-                (true, _)  => format!("MAC: {} • Sin nombre resuelto", mac),
+                (true, _)  => format!("MAC: {} â€¢ Sin nombre resuelto", mac),
                 (false, true)  => format!("IP: {}", ip),
-                (false, false) => format!("{} • IP: {}", brand, ip),
+                (false, false) => format!("{} â€¢ IP: {}", brand, ip),
             };
 
             DiscoveredDevice {
@@ -993,7 +1019,7 @@ async fn start_free_discovery() -> Result<Vec<DiscoveredDevice>, String> {
     }
 
     device_details.sort_by(|a, b| a.ip.cmp(&b.ip));
-    info!("Búsqueda libre completada. Dispositivos resueltos: {:?}", device_details);
+    info!("BÃºsqueda libre completada. Dispositivos resueltos: {:?}", device_details);
     Ok(device_details)
 }
 
@@ -1279,6 +1305,151 @@ fn parse_ping_latency(output: &str) -> Option<f64> {
     None
 }
 
+// ===== SCREEN LAYOUT HELPERS =====
+
+/// Collect local screen information from the OS (cross-platform)
+fn collect_local_screens() -> Vec<ScreenInfo> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        // Query screens via powershell
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; \
+                [System.Windows.Forms.Screen]::AllScreens | ForEach-Object { \
+                    $b = $_.Bounds; \
+                    Write-Output \"$($b.X),$($b.Y),$($b.Width),$($b.Height),$($_.Primary),$($_.DeviceName)\" \
+                }"
+            ])
+            .output();
+
+        if let Ok(out) = output {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut screens = Vec::new();
+            for (i, line) in text.lines().enumerate() {
+                let parts: Vec<&str> = line.trim().split(',').collect();
+                if parts.len() >= 5 {
+                    let x: i32 = parts[0].parse().unwrap_or(0);
+                    let y: i32 = parts[1].parse().unwrap_or(0);
+                    let w: u32 = parts[2].parse().unwrap_or(1920);
+                    let h: u32 = parts[3].parse().unwrap_or(1080);
+                    let primary = parts[4].trim().eq_ignore_ascii_case("true");
+                    let name = if parts.len() >= 6 { parts[5..].join(",").trim().to_string() } else { format!("Display {}", i + 1) };
+                    screens.push(ScreenInfo {
+                        id: format!("screen-{}", i),
+                        name: name.trim_start_matches("\\\\.\\DISPLAY").to_string(),
+                        x, y, width: w, height: h, is_primary: primary,
+                    });
+                }
+            }
+            if !screens.is_empty() {
+                return screens;
+            }
+        }
+        // Fallback
+        vec![ScreenInfo { id: "screen-0".to_string(), name: "Pantalla principal".to_string(), x: 0, y: 0, width: 1920, height: 1080, is_primary: true }]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        // Try xrandr first
+        let output = Command::new("xrandr").arg("--query").output();
+        if let Ok(out) = output {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut screens = Vec::new();
+            let mut idx = 0usize;
+            for line in text.lines() {
+                // Lines like: HDMI-1 connected 1920x1080+0+0 ...
+                if line.contains(" connected ") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    let name = parts[0].to_string();
+                    // find geometry NxM+X+Y
+                    for part in &parts {
+                        if part.contains('x') && part.contains('+') {
+                            let geom: Vec<&str> = part.split(|c| c == 'x' || c == '+').collect();
+                            if geom.len() >= 4 {
+                                let w: u32 = geom[0].parse().unwrap_or(1920);
+                                let h: u32 = geom[1].parse().unwrap_or(1080);
+                                let x: i32 = geom[2].parse().unwrap_or(0);
+                                let y: i32 = geom[3].parse().unwrap_or(0);
+                                screens.push(ScreenInfo {
+                                    id: format!("screen-{}", idx),
+                                    name: name.clone(),
+                                    x, y, width: w, height: h,
+                                    is_primary: idx == 0,
+                                });
+                                idx += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if !screens.is_empty() {
+                return screens;
+            }
+        }
+        // Fallback
+        vec![ScreenInfo { id: "screen-0".to_string(), name: "Pantalla principal".to_string(), x: 0, y: 0, width: 1920, height: 1080, is_primary: true }]
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        vec![ScreenInfo { id: "screen-0".to_string(), name: "Pantalla principal".to_string(), x: 0, y: 0, width: 1920, height: 1080, is_primary: true }]
+    }
+}
+
+// ===== DEVICE LINKING COMMANDS =====
+
+#[tauri::command]
+fn get_local_screens() -> Vec<ScreenInfo> {
+    collect_local_screens()
+}
+
+#[tauri::command]
+fn get_remote_screens(state: tauri::State<AppState>) -> std::collections::HashMap<String, Vec<ScreenInfo>> {
+    state.remote_screens.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn link_device(ip: String, name: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let mut config = state.config.lock().unwrap();
+    // Avoid duplicates
+    if !config.linked_devices.iter().any(|d| d.ip == ip) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        config.linked_devices.push(LinkedDevice { ip: ip.clone(), name: name.clone(), linked_at: ts });
+        config.save()?;
+        info!("Dispositivo vinculado: {} ({})", name, ip);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn unlink_device(ip: String, state: tauri::State<AppState>) -> Result<(), String> {
+    let mut config = state.config.lock().unwrap();
+    config.linked_devices.retain(|d| d.ip != ip);
+    config.save()?;
+    info!("Dispositivo desvinculado: {}", ip);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_linked_devices(state: tauri::State<AppState>) -> Vec<LinkedDevice> {
+    state.config.lock().unwrap().linked_devices.clone()
+}
+
+#[tauri::command]
+fn get_cursor_on_remote(state: tauri::State<AppState>) -> bool {
+    *state.cursor_on_remote.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_cursor_on_remote(value: bool, state: tauri::State<AppState>) {
+    *state.cursor_on_remote.lock().unwrap() = value;
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1327,16 +1498,16 @@ pub fn run() {
                                 match incoming.await {
                                     Ok(conn) => {
                                         let remote_addr = conn.remote_address().to_string();
-                                        info!("Conexión entrante aceptada de {}", remote_addr);
+                                        info!("ConexiÃ³n entrante aceptada de {}", remote_addr);
                                         
-                                        // Guardar conexión en la lista de conexiones activas
+                                        // Guardar conexiÃ³n en la lista de conexiones activas
                                         state_nested.connections.lock().unwrap().insert(remote_addr.clone(), conn.clone());
                                         
-                                        // Iniciar bucle receptor independiente para esta conexión
+                                        // Iniciar bucle receptor independiente para esta conexiÃ³n
                                         start_receive_loop(conn, state_nested, remote_addr, true);
                                     }
                                     Err(e) => {
-                                        error!("Error al aceptar conexión QUIC entrante: {}", e);
+                                        error!("Error al aceptar conexiÃ³n QUIC entrante: {}", e);
                                     }
                                 }
                             });
@@ -1348,6 +1519,30 @@ pub fn run() {
                     }
                 }
             });
+            
+            // Auto-connect to linked devices if enabled
+            let auto_connect = state.config.lock().unwrap().general.auto_connect;
+            if auto_connect {
+                let linked = state.config.lock().unwrap().linked_devices.clone();
+                let state_auto = state.inner().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Wait a bit for the QUIC server to start
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    for device in linked {
+                        info!("Auto-conectando a dispositivo vinculado: {} ({})", device.name, device.ip);
+                        match NetworkManager::connect(&device.ip, 9876).await {
+                            Ok(conn) => {
+                                state_auto.connections.lock().unwrap().insert(device.ip.clone(), conn.clone());
+                                start_receive_loop(conn, state_auto.clone(), device.ip.clone(), false);
+                                info!("Auto-conexiÃ³n exitosa a {}", device.ip);
+                            }
+                            Err(e) => {
+                                warn!("No se pudo auto-conectar a {}: {}", device.ip, e);
+                            }
+                        }
+                    }
+                });
+            }
             
             Ok(())
         })
@@ -1368,7 +1563,18 @@ pub fn run() {
             stop_services,
             get_local_ips,
             ping_host,
+            get_local_screens,
+            get_remote_screens,
+            link_device,
+            unlink_device,
+            get_linked_devices,
+            get_cursor_on_remote,
+            set_cursor_on_remote,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+
+
+
