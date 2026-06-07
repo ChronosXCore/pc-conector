@@ -173,6 +173,14 @@ impl InputService {
         Ok(())
     }
 
+    /// Warp mouse to absolute position (used to snap cursor back when entering remote zone)
+    pub fn warp_mouse(&self, x: i32, y: i32) -> Result<(), String> {
+        let mut enigo = self.enigo.lock().unwrap();
+        use enigo::{Coordinate, Mouse as EnigoMouse};
+        enigo.move_mouse(x, y, Coordinate::Abs)
+            .map_err(|e| format!("Error al teletransportar mouse: {:?}", e))
+    }
+
     /// Detener captura
     pub fn stop_capture(&self) {
         *self.is_capturing.lock().unwrap() = false;

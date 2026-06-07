@@ -35,6 +35,8 @@ export interface AppConfig {
     reconnect_interval: number
     encryption_enabled: boolean
     security_token: string
+    require_approval: boolean
+    allowed_devices: string[]
   }
   linked_devices: LinkedDevice[]
 }

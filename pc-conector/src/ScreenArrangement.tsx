@@ -1,75 +1,98 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { ScreensIcon, InfoIcon, LaptopIcon } from './Icons'
+import { ScreensIcon, InfoIcon, LaptopIcon, CheckIcon } from './Icons'
 import type { ScreenInfo } from './types'
+
+interface VirtualScreen {
+  id: string
+  name: string
+  owner: string  // 'local' or peer IP
+  x: number
+  y: number
+  width: number
+  height: number
+  is_primary: boolean
+}
 
 interface RemoteScreens {
   [addr: string]: ScreenInfo[]
 }
 
-interface CombinedScreen extends ScreenInfo {
-  owner: 'local' | string  // 'local' or peer IP
-  ownerLabel: string
-}
-
 export default function ScreenArrangement() {
   const [localScreens, setLocalScreens] = useState<ScreenInfo[]>([])
   const [remoteScreens, setRemoteScreens] = useState<RemoteScreens>({})
+  const [virtualLayout, setVirtualLayout] = useState<VirtualScreen[]>([])
   const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
   const [dragging, setDragging] = useState<string | null>(null)
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
   const dragOffset = useRef({ x: 0, y: 0 })
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setLoading(true)
-      const [local, remote] = await Promise.all([
+      const [local, remote, vLayout] = await Promise.all([
         invoke<ScreenInfo[]>('get_local_screens'),
         invoke<RemoteScreens>('get_remote_screens'),
+        invoke<VirtualScreen[]>('get_virtual_layout'),
       ])
       setLocalScreens(local)
       setRemoteScreens(remote)
+      setVirtualLayout(vLayout)
+      // Init positions from virtual layout
+      const pos: Record<string, { x: number; y: number }> = {}
+      for (const vs of vLayout) {
+        pos[vs.id] = { x: vs.x, y: vs.y }
+      }
+      setPositions(pos)
     } catch (e) {
       console.error('Error al obtener pantallas:', e)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     refresh()
-    const interval = setInterval(refresh, 5000)
+    const interval = setInterval(refresh, 6000)
     return () => clearInterval(interval)
-  }, [])
+  }, [refresh])
 
-  // Build combined list
-  const combined: CombinedScreen[] = [
-    ...localScreens.map(s => ({ ...s, owner: 'local', ownerLabel: 'Este equipo' })),
-    ...Object.entries(remoteScreens).flatMap(([addr, screens]) =>
-      screens.map(s => ({ ...s, id: `${addr}-${s.id}`, owner: addr, ownerLabel: addr }))
-    ),
-  ]
+  // Build combined list from local + remote, applying user positions
+  const combined: VirtualScreen[] = virtualLayout.length > 0
+    ? virtualLayout
+    : [
+        ...localScreens.map(s => ({
+          ...s, owner: 'local',
+        })),
+        ...Object.entries(remoteScreens).flatMap(([addr, screens]) =>
+          screens.map((s, i) => ({
+            ...s,
+            id: `${addr}-${s.id}`,
+            owner: addr,
+            x: (localScreens[0]?.width ?? 1920) + s.x,
+          }))
+        ),
+      ]
 
   // Scale for display
-  const SCALE = 0.12
-  const MIN_W = 130
-  const MIN_H = 80
+  const SCALE = 0.10
+  const MIN_W = 120
+  const MIN_H = 72
+  const canvasW = 700
+  const canvasH = 300
 
-  const getDisplaySize = (s: ScreenInfo) => ({
+  const getDisplaySize = (s: VirtualScreen) => ({
     w: Math.max(MIN_W, Math.round(s.width * SCALE)),
     h: Math.max(MIN_H, Math.round(s.height * SCALE)),
   })
 
-  // Get current position (draggable or original)
-  const getPos = (s: CombinedScreen) => {
-    if (positions[s.id]) return positions[s.id]
-    return { x: Math.round(s.x * SCALE), y: Math.round(s.y * SCALE) }
+  const getPos = (s: VirtualScreen) => {
+    if (positions[s.id] !== undefined) return positions[s.id]
+    return { x: s.x * SCALE, y: s.y * SCALE }
   }
-
-  // Canvas bounds
-  const canvasW = 680
-  const canvasH = 320
 
   // Drag handlers
   const onMouseDown = (e: React.MouseEvent, id: string) => {
@@ -77,6 +100,7 @@ export default function ScreenArrangement() {
     const rect = (e.target as HTMLElement).closest('.screen-item')!.getBoundingClientRect()
     dragOffset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
     setDragging(id)
+    setSaved(false)
   }
 
   useEffect(() => {
@@ -98,8 +122,30 @@ export default function ScreenArrangement() {
     }
   }, [dragging])
 
+  const handleApplyLayout = async () => {
+    try {
+      setSaving(true)
+      // Build updated VirtualScreen list with new positions
+      const updated: VirtualScreen[] = combined.map(vs => {
+        const pos = positions[vs.id]
+        const realX = pos ? Math.round(pos.x / SCALE) : vs.x
+        const realY = pos ? Math.round(pos.y / SCALE) : vs.y
+        return { ...vs, x: realX, y: realY }
+      })
+      await invoke('set_virtual_layout', { layout: updated })
+      setVirtualLayout(updated)
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (e) {
+      console.error('Error al guardar layout:', e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const peerCount = Object.keys(remoteScreens).length
   const totalScreens = combined.length
+  const hasUnsavedChanges = dragging === null && Object.keys(positions).length > 0
 
   return (
     <div className="panel">
@@ -108,13 +154,40 @@ export default function ScreenArrangement() {
           <h2>Configuración de Pantallas</h2>
           <p className="panel-subtitle">
             {peerCount > 0
-              ? `${totalScreens} pantalla(s) en total — Este equipo + ${peerCount} PC(s) remoto(s)`
+              ? `${totalScreens} pantalla(s) — Este equipo + ${peerCount} PC(s) remoto(s) • Arrastra para reposicionar`
               : 'Muestra las pantallas de todos los equipos conectados'}
           </p>
         </div>
-        <button className="btn btn-small" onClick={refresh} disabled={loading}>
-          {loading ? 'Actualizando...' : 'Actualizar'}
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button className="btn btn-small" onClick={refresh} disabled={loading}>
+            {loading ? 'Actualizando...' : 'Actualizar'}
+          </button>
+          {hasUnsavedChanges && (
+            <button
+              className="btn btn-primary btn-small"
+              onClick={handleApplyLayout}
+              disabled={saving}
+            >
+              {saved
+                ? <><CheckIcon size={14} /> Guardado</>
+                : saving ? 'Guardando...' : 'Aplicar disposición'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: '16px', marginBottom: '12px', flexWrap: 'wrap' }}>
+        <div className="screen-legend-item screen-legend-local">
+          <div className="screen-legend-dot" />
+          <span>Este equipo</span>
+        </div>
+        {Object.keys(remoteScreens).map(addr => (
+          <div key={addr} className="screen-legend-item screen-legend-remote">
+            <div className="screen-legend-dot remote" />
+            <span>{addr.split(':')[0]}</span>
+          </div>
+        ))}
       </div>
 
       {loading && combined.length === 0 ? (
@@ -128,83 +201,93 @@ export default function ScreenArrangement() {
           <p>No se detectaron pantallas. Conecta un monitor adicional.</p>
         </div>
       ) : (
-        <div
-          className="screen-canvas"
-          ref={containerRef}
-          style={{ position: 'relative', width: '100%', height: `${canvasH}px`, userSelect: 'none', cursor: dragging ? 'grabbing' : 'default' }}
-        >
-          {combined.map((screen) => {
-            const { w, h } = getDisplaySize(screen)
-            const pos = getPos(screen)
-            const isLocal = screen.owner === 'local'
-            const isDraggingThis = dragging === screen.id
+        <>
+          {/* Canvas */}
+          <div className="screen-canvas-wrapper">
+            <div
+              className="screen-canvas"
+              ref={containerRef}
+              style={{
+                position: 'relative',
+                width: '100%',
+                height: `${canvasH}px`,
+                userSelect: 'none',
+                cursor: dragging ? 'grabbing' : 'default',
+              }}
+            >
+              {/* Grid lines */}
+              <div className="screen-canvas-grid" />
 
-            // Center offset so origin (0,0) is roughly center-left
-            const cx = 40 + pos.x
-            const cy = canvasH / 2 - 60 + pos.y
+              {combined.map((screen) => {
+                const { w, h } = getDisplaySize(screen)
+                const pos = getPos(screen)
+                const isLocal = screen.owner === 'local'
+                const isDraggingThis = dragging === screen.id
+                const cx = 20 + pos.x
+                const cy = canvasH / 2 - h / 2 + pos.y * SCALE
 
-            return (
-              <div
-                key={screen.id}
-                className={`screen-item ${isLocal ? 'screen-local' : 'screen-remote'} ${isDraggingThis ? 'screen-dragging' : ''}`}
-                style={{
-                  position: 'absolute',
-                  left: `${cx}px`,
-                  top: `${cy}px`,
-                  width: `${w}px`,
-                  height: `${h}px`,
-                  cursor: 'grab',
-                  zIndex: isDraggingThis ? 100 : 1,
-                }}
-                onMouseDown={(e) => onMouseDown(e, screen.id)}
-              >
-                {isLocal
-                  ? <LaptopIcon size={20} style={{ opacity: 0.85, marginBottom: '4px' }} />
-                  : <ScreensIcon size={20} style={{ opacity: 0.85, marginBottom: '4px' }} />
-                }
-                <span style={{ fontSize: '11px', fontWeight: 600 }}>{screen.name}</span>
-                <span style={{ fontSize: '9px', opacity: 0.65, marginTop: '2px' }}>
-                  {screen.width}×{screen.height}
-                </span>
-                <span style={{
-                  fontSize: '8px',
-                  marginTop: '2px',
-                  padding: '1px 5px',
-                  borderRadius: '999px',
-                  background: isLocal ? 'rgba(99,179,237,0.25)' : 'rgba(154,114,243,0.25)',
-                  color: isLocal ? '#90cdf4' : '#c4b5fd',
-                }}>
-                  {screen.ownerLabel}
-                </span>
-                {screen.is_primary && (
-                  <span className="primary-badge">Principal</span>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Legend */}
-      <div style={{ display: 'flex', gap: '20px', marginTop: '16px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', opacity: 0.75 }}>
-          <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: 'rgba(99,179,237,0.3)', border: '1px solid rgba(99,179,237,0.5)' }} />
-          <span>Este equipo</span>
-        </div>
-        {Object.keys(remoteScreens).map(addr => (
-          <div key={addr} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', opacity: 0.75 }}>
-            <div style={{ width: '12px', height: '12px', borderRadius: '3px', background: 'rgba(154,114,243,0.3)', border: '1px solid rgba(154,114,243,0.5)' }} />
-            <span>{addr}</span>
+                return (
+                  <div
+                    key={screen.id}
+                    className={`screen-item ${isLocal ? 'screen-local' : 'screen-remote'} ${isDraggingThis ? 'screen-dragging' : ''}`}
+                    style={{
+                      position: 'absolute',
+                      left: `${cx}px`,
+                      top: `${cy}px`,
+                      width: `${w}px`,
+                      height: `${h}px`,
+                      cursor: 'grab',
+                      zIndex: isDraggingThis ? 100 : 1,
+                    }}
+                    onMouseDown={(e) => onMouseDown(e, screen.id)}
+                  >
+                    {isLocal
+                      ? <LaptopIcon size={18} style={{ opacity: 0.85, marginBottom: '3px' }} />
+                      : <ScreensIcon size={18} style={{ opacity: 0.85, marginBottom: '3px' }} />
+                    }
+                    <span style={{ fontSize: '10px', fontWeight: 700, textAlign: 'center', lineHeight: 1.2 }}>
+                      {screen.name.replace('\\\\.\\DISPLAY', 'Display ')}
+                    </span>
+                    <span style={{ fontSize: '9px', opacity: 0.6, marginTop: '2px' }}>
+                      {screen.width}×{screen.height}
+                    </span>
+                    <span style={{
+                      fontSize: '8px',
+                      marginTop: '3px',
+                      padding: '1px 6px',
+                      borderRadius: '999px',
+                      background: isLocal ? 'rgba(99,179,237,0.2)' : 'rgba(154,114,243,0.2)',
+                      color: isLocal ? '#90cdf4' : '#c4b5fd',
+                      maxWidth: '90%',
+                      textAlign: 'center',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {isLocal ? 'Este equipo' : screen.owner.split(':')[0]}
+                    </span>
+                    {screen.is_primary && (
+                      <span className="primary-badge">Principal</span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
-        ))}
-      </div>
 
-      <div className="screen-actions" style={{ marginTop: '16px' }}>
-        <div className="hint">
-          <InfoIcon size={16} />
-          <span>Arrastra las pantallas para visualizar cómo están dispuestas. Al conectar un equipo remoto, sus pantallas aparecen aquí automáticamente.</span>
-        </div>
-      </div>
+          {/* Info box */}
+          <div className="hint" style={{ marginTop: '12px' }}>
+            <InfoIcon size={16} />
+            <span>
+              Arrastra las pantallas para definir la disposición virtual.
+              {peerCount > 0
+                ? ' El mouse pasará automáticamente al otro PC cuando llegue al borde compartido.'
+                : ' Conecta un PC remoto para ver sus pantallas y habilitar el paso del mouse.'}
+              {' '}Pulsa <strong>Aplicar disposición</strong> para guardar los cambios.
+            </span>
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import './App.css'
 import logoImg from './assets/logo.png'
 import ScreenArrangement from './ScreenArrangement'
@@ -7,6 +8,7 @@ import ServicesPanel from './ServicesPanel'
 import AudioPanel from './AudioPanel'
 import SettingsPanel from './SettingsPanel'
 import LinkedDevicesPanel from './LinkedDevicesPanel'
+import ConnectionRequestModal from './ConnectionRequestModal'
 import type { AudioDevice, AppConfig, Tab, DiscoveredDevice } from './types'
 import ShareModal from './ShareModal'
 import NetworkStatsPanel from './NetworkStatsPanel'
@@ -45,6 +47,8 @@ export default function App() {
   const [shareModalOpen, setShareModalOpen] = useState(false)
   const [shareTargetIp, setShareTargetIp] = useState('')
   const [connectingAddr, setConnectingAddr] = useState<string | null>(null)
+  const [connectionRequest, setConnectionRequest] = useState<{ ip: string; hostname: string } | null>(null)
+  const [cursorOnRemote, setCursorOnRemote] = useState<string | null>(null) // peer IP or null
 
   const [isDark, setIsDark] = useState(() => {
     const t = document.documentElement.getAttribute('data-theme')
@@ -54,6 +58,34 @@ export default function App() {
   useEffect(() => {
     loadConfig()
     checkConnection()
+
+    const unlisteners: (() => void)[] = []
+    const setupListeners = async () => {
+      try {
+        unlisteners.push(await listen<string[]>('connections-changed', (event) => {
+          setConnected(event.payload.length > 0)
+          setConnectedPeers(event.payload)
+        }))
+        unlisteners.push(await listen<{ ip: string; hostname: string }>('connection-request', (event) => {
+          setConnectionRequest(event.payload)
+        }))
+        unlisteners.push(await listen<string>('cursor-on-remote', (event) => {
+          setCursorOnRemote(event.payload)
+          setStatusMessage(`🖱️ Cursor en PC remota: ${event.payload.split(':')[0]}`)
+        }))
+        unlisteners.push(await listen<null>('cursor-returned-local', () => {
+          setCursorOnRemote(null)
+          setStatusMessage('Cursor devuelto al equipo local')
+        }))
+      } catch (e) {
+        console.warn('Tauri event listener failed:', e)
+      }
+    }
+    setupListeners()
+
+    return () => {
+      unlisteners.forEach(u => u())
+    }
   }, [])
 
   const toggleTheme = () => {
@@ -260,6 +292,13 @@ export default function App() {
 
       <main className="main-content">
         <header className="top-bar">
+          {cursorOnRemote && (
+            <div className="cursor-remote-banner">
+              <span className="cursor-remote-dot" />
+              <span>Cursor en PC remota: <strong>{cursorOnRemote.split(':')[0]}</strong></span>
+              <span className="cursor-remote-hint">Mueve el mouse de regreso al borde de tu pantalla para volver</span>
+            </div>
+          )}
           <div className="status-bar">
             <span className="status-message">
               {connected ? <CheckIcon size={16} color="var(--success)" /> : <InfoIcon size={16} color="var(--text-secondary)" />}
@@ -334,6 +373,11 @@ export default function App() {
         isOpen={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
         ipAddress={shareTargetIp}
+      />
+
+      <ConnectionRequestModal
+        request={connectionRequest}
+        onClose={() => setConnectionRequest(null)}
       />
     </div>
   )

@@ -59,6 +59,14 @@ pub struct ConnectionConfig {
     pub reconnect_interval: u64,
     pub encryption_enabled: bool,
     pub security_token: String,
+    #[serde(default = "default_require_approval")]
+    pub require_approval: bool,
+    #[serde(default)]
+    pub allowed_devices: Vec<String>,
+}
+
+fn default_require_approval() -> bool {
+    true
 }
 
 /// A trusted device that has been "linked" for auto-connect
@@ -100,6 +108,8 @@ impl Default for AppConfig {
                 reconnect_interval: 5,
                 encryption_enabled: true,
                 security_token: "123456".to_string(),
+                require_approval: true,
+                allowed_devices: Vec::new(),
             },
             linked_devices: Vec::new(),
         }
