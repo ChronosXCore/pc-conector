@@ -37,7 +37,7 @@ impl DiscoveryService {
             "", // IP se detecta automáticamente
             port,
             None, // sin propiedades adicionales
-        ).map_err(|e| format!("Error al crear servicio mDNS: {}", e))?;
+        ).map_err(|e| format!("Error al crear servicio mDNS: {}", e))?.enable_addr_auto();
 
         mdns.register(service_info)
             .map_err(|e| format!("Error al registrar servicio: {}", e))?;
