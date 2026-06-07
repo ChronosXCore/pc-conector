@@ -86,7 +86,7 @@ impl NetworkManager {
         Ok(endpoint)
     }
 
-    /// Conectar a un peer remoto (modo cliente)
+    /// Conectar a un peer remoto (modo cliente) con tiempo límite de 5 segundos
     pub async fn connect(addr: &str, port: u16) -> Result<Connection, String> {
         let client_config = configure_client()?;
         let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap())
@@ -98,11 +98,17 @@ impl NetworkManager {
             .parse()
             .map_err(|e| format!("Dirección del servidor inválida: {}", e))?;
 
-        let connection = endpoint
+        let connect_future = endpoint
             .connect(server_addr, "localhost")
-            .map_err(|e| format!("Error al conectar: {}", e))?
-            .await
-            .map_err(|e| format!("Conexión rechazada: {}", e))?;
+            .map_err(|e| format!("Error al conectar: {}", e))?;
+
+        let connection = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            connect_future,
+        )
+        .await
+        .map_err(|_| format!("Tiempo de espera agotado: {} no respondió en 5 segundos. ¿Está PC Conector abierto en ese equipo?", addr))?
+        .map_err(|e| format!("Conexión rechazada: {}", e))?;
 
         info!("Conectado a {}:{}", addr, port);
         Ok(connection)

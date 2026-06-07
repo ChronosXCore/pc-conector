@@ -189,7 +189,7 @@ async fn receive_message_on_conn(conn: &quinn::Connection) -> Result<NetworkMess
 }
 
 #[tauri::command]
-fn start_discovery(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
+async fn start_discovery(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
     info!("Iniciando descubrimiento de peers...");
     
     // Si no está iniciado en el arranque (o si fue detenido), lo iniciamos
@@ -201,8 +201,8 @@ fn start_discovery(state: tauri::State<AppState>) -> Result<Vec<String>, String>
         *state.discovery.lock().unwrap() = Some(discovery);
     }
     
-    // Esperar 2 segundos para dar tiempo a descubrir peers adicionales en la red local
-    std::thread::sleep(Duration::from_secs(2));
+    // Esperar 2 segundos para dar tiempo a descubrir peers adicionales en la red local sin bloquear el hilo
+    tokio::time::sleep(Duration::from_secs(2)).await;
     
     let discovery_guard = state.discovery.lock().unwrap();
     let peers = if let Some(ref discovery) = *discovery_guard {
@@ -295,13 +295,11 @@ async fn start_free_discovery() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn connect_to_peer(addr: String, state: tauri::State<AppState>) -> Result<String, String> {
+async fn connect_to_peer(addr: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
     info!("Conectando a {}...", addr);
     
     let server_addr = addr.clone();
-    let conn = tauri::async_runtime::block_on(async {
-        NetworkManager::connect(&server_addr, 9876).await
-    })?;
+    let conn = NetworkManager::connect(&server_addr, 9876).await?;
     
     state.connections.lock().unwrap().insert(addr.clone(), conn.clone());
     

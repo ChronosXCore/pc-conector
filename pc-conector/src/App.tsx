@@ -32,6 +32,7 @@ export default function App() {
   const [isFreeSearch, setIsFreeSearch] = useState(false)
   const [shareModalOpen, setShareModalOpen] = useState(false)
   const [shareTargetIp, setShareTargetIp] = useState('')
+  const [connectingAddr, setConnectingAddr] = useState<string | null>(null)
 
   useEffect(() => {
     loadConfig()
@@ -75,8 +76,15 @@ export default function App() {
     try {
       setIsSearching(true)
       setStatusMessage('Buscando dispositivos en la red...')
+      
+      const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      
       if (isFreeSearch) {
-        const found = await invoke<string[]>('start_free_discovery')
+        // Ejecutar la llamada Tauri y el retraso artificial en paralelo para mostrar la animación
+        const [found] = await Promise.all([
+          invoke<string[]>('start_free_discovery'),
+          delay(1800)
+        ]);
         setPeers(found)
         setIsSearching(false)
         if (found.length > 0) {
@@ -101,13 +109,17 @@ export default function App() {
   }
 
   const handleConnect = async (addr: string) => {
+    const targetAddr = addr.split(' - ')[1] || addr;
     try {
-      setStatusMessage(`Conectando a ${addr}...`)
-      await invoke('connect_to_peer', { addr: addr.split(' - ')[1] || addr })
+      setConnectingAddr(targetAddr)
+      setStatusMessage(`Conectando a ${targetAddr}...`)
+      await invoke('connect_to_peer', { addr: targetAddr })
       await checkConnection()
-      setStatusMessage(`Conectado a ${addr}`)
+      setStatusMessage(`Conectado a ${targetAddr}`)
     } catch (e) {
       setStatusMessage(`Error al conectar: ${e}`)
+    } finally {
+      setConnectingAddr(null)
     }
   }
 
@@ -236,6 +248,7 @@ export default function App() {
               isSearching={isSearching}
               isFreeSearch={isFreeSearch}
               setIsFreeSearch={setIsFreeSearch}
+              connectingAddr={connectingAddr}
               onDiscover={handleDiscover}
               onConnect={handleConnect}
               onDisconnectFromPeer={handleDisconnectFromPeer}
@@ -291,6 +304,7 @@ function Dashboard({
   isSearching,
   isFreeSearch,
   setIsFreeSearch,
+  connectingAddr,
   onDiscover,
   onConnect,
   onDisconnectFromPeer,
@@ -302,12 +316,15 @@ function Dashboard({
   isSearching: boolean
   isFreeSearch: boolean
   setIsFreeSearch: (val: boolean) => void
+  connectingAddr: string | null
   onDiscover: () => void
   onConnect: (addr: string) => void
   onDisconnectFromPeer: (addr: string) => void
   onShareApp: (ip: string) => void
 }) {
   const [manualIp, setManualIp] = useState('')
+
+  const isManualConnecting = connectingAddr === manualIp;
 
   return (
     <div className="panel">
@@ -326,13 +343,14 @@ function Dashboard({
           </div>
         </div>
 
-        <label className="search-config">
+        <label className="checkbox-container">
           <input
             type="checkbox"
             checked={isFreeSearch}
             onChange={(e) => setIsFreeSearch(e.target.checked)}
             disabled={isSearching}
           />
+          <span className="custom-checkbox" />
           <span>Búsqueda libre (Tabla ARP)</span>
         </label>
 
@@ -354,9 +372,10 @@ function Dashboard({
             placeholder="Ej: 192.168.1.15"
             value={manualIp}
             onChange={(e) => setManualIp(e.target.value)}
+            disabled={!!connectingAddr}
             className="manual-input"
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && manualIp) {
+              if (e.key === 'Enter' && manualIp && !connectingAddr) {
                 onConnect(manualIp);
               }
             }}
@@ -364,9 +383,9 @@ function Dashboard({
           <button
             className="btn btn-primary"
             onClick={() => onConnect(manualIp)}
-            disabled={!manualIp}
+            disabled={!manualIp || !!connectingAddr}
           >
-            Conectar
+            {isManualConnecting ? 'Conectando...' : 'Conectar'}
           </button>
         </div>
       </div>
@@ -388,6 +407,7 @@ function Dashboard({
             const name = parts[0] || peer;
             const addr = parts[1] || peer;
             const isPeerConnected = connectedPeers.includes(addr);
+            const isThisConnecting = connectingAddr === addr;
             return (
               <div key={i} className="peer-card">
                 <div className="peer-info">
@@ -420,6 +440,7 @@ function Dashboard({
                       className="btn btn-primary btn-small"
                       onClick={() => onShareApp(addr)}
                       style={{ background: 'rgba(139, 92, 246, 0.12)', color: 'var(--accent)', boxShadow: 'none' }}
+                      disabled={!!connectingAddr}
                     >
                       Compartir
                     </button>
@@ -428,6 +449,7 @@ function Dashboard({
                     <button
                       className="btn btn-danger btn-small"
                       onClick={() => onDisconnectFromPeer(addr)}
+                      disabled={!!connectingAddr}
                     >
                       Desconectar
                     </button>
@@ -435,8 +457,9 @@ function Dashboard({
                     <button
                       className="btn btn-primary btn-small"
                       onClick={() => onConnect(peer)}
+                      disabled={!!connectingAddr}
                     >
-                      Conectar
+                      {isThisConnecting ? 'Conectando...' : 'Conectar'}
                     </button>
                   )}
                 </div>
