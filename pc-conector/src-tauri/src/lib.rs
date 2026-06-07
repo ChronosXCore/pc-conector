@@ -221,28 +221,6 @@ async fn start_discovery(state: tauri::State<'_, AppState>) -> Result<Vec<String
     Ok(peer_names)
 }
 
-fn parse_ips_from_arp_output(output: &str) -> Vec<String> {
-    let mut ips = Vec::new();
-    for line in output.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
-        }
-        if let Ok(ip) = parts[0].parse::<std::net::Ipv4Addr>() {
-            if is_valid_local_ip(&ip) {
-                ips.push(ip.to_string());
-            }
-        } else if parts.len() >= 2 {
-            if let Ok(ip) = parts[1].parse::<std::net::Ipv4Addr>() {
-                if is_valid_local_ip(&ip) {
-                    ips.push(ip.to_string());
-                }
-            }
-        }
-    }
-    ips
-}
-
 fn is_valid_local_ip(ip: &std::net::Ipv4Addr) -> bool {
     let octets = ip.octets();
     if ip.is_loopback() {
@@ -262,58 +240,75 @@ fn is_valid_local_ip(ip: &std::net::Ipv4Addr) -> bool {
 
 
 
-fn get_local_ip_via_udp() -> Option<std::net::Ipv4Addr> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    match socket.local_addr().ok()?.ip() {
-        std::net::IpAddr::V4(ip) => Some(ip),
-        _ => None,
-    }
-}
-
-fn get_all_local_ips() -> Vec<std::net::Ipv4Addr> {
-    let mut ips = Vec::new();
-    
-    if let Some(ip) = get_local_ip_via_udp() {
-        ips.push(ip);
-    }
-    
-    #[cfg(target_os = "windows")]
+fn configure_system_firewall() {
+    #[cfg(target_os = "linux")]
     {
-        if let Ok(output) = std::process::Command::new("ipconfig").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if line.contains("IPv4") {
-                    if let Some(pos) = line.rfind(':') {
-                        let ip_str = line[pos + 1..].trim();
-                        if let Ok(ip) = ip_str.parse::<std::net::Ipv4Addr>() {
-                            if !ip.is_loopback() && !ips.contains(&ip) {
-                                ips.push(ip);
-                            }
-                        }
-                    }
+        info!("Intentando configurar cortafuegos en Linux...");
+        
+        // Verificar si ufw está activo
+        if std::process::Command::new("ufw").arg("--version").status().is_ok() {
+            let status = std::process::Command::new("ufw").arg("status").output();
+            if let Ok(out) = status {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("active") || stdout.contains("activo") {
+                    info!("UFW detectado activo. Habilitando puertos de red para PC Conector...");
+                    let _ = std::process::Command::new("pkexec")
+                        .args(["ufw", "allow", "9876/udp"])
+                        .status();
+                    let _ = std::process::Command::new("pkexec")
+                        .args(["ufw", "allow", "5353/udp"])
+                        .status();
+                }
+            }
+        }
+        
+        // Verificar si firewalld está activo
+        if std::process::Command::new("firewall-cmd").arg("--version").status().is_ok() {
+            let status = std::process::Command::new("firewall-cmd").arg("--state").output();
+            if let Ok(out) = status {
+                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if stdout == "running" {
+                    info!("Firewalld detectado activo. Habilitando puertos de red para PC Conector...");
+                    let _ = std::process::Command::new("pkexec")
+                        .args(["firewall-cmd", "--add-port=9876/udp", "--permanent"])
+                        .status();
+                    let _ = std::process::Command::new("pkexec")
+                        .args(["firewall-cmd", "--add-port=5353/udp", "--permanent"])
+                        .status();
+                    let _ = std::process::Command::new("pkexec")
+                        .args(["firewall-cmd", "--reload"])
+                        .status();
                 }
             }
         }
     }
-    
-    #[cfg(not(target_os = "windows"))]
+
+    #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("ip").args(["addr", "show"]).output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                if line.contains("inet ") && !line.contains("127.0.0.1") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    for part in parts {
-                        if part.contains('/') {
-                            if let Some(ip_part) = part.split('/').next() {
-                                if let Ok(ip) = ip_part.parse::<std::net::Ipv4Addr>() {
-                                    if !ips.contains(&ip) {
-                                        ips.push(ip);
-                                    }
-                                }
-                            }
-                        }
+        info!("Intentando configurar cortafuegos en Windows...");
+        // Añadir regla en el cortafuegos de Windows para puertos 9876 y 5353
+        let cmd = "New-NetFirewallRule -DisplayName 'PC Conector' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9876,5353 -ErrorAction SilentlyContinue";
+        let _ = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-WindowStyle", "Hidden",
+                "-Command",
+                &format!("Start-Process powershell -ArgumentList '-NoProfile -WindowStyle Hidden -Command \"{}\"' -Verb RunAs", cmd)
+            ])
+            .status();
+    }
+}
+
+
+fn get_all_local_ips() -> Vec<std::net::Ipv4Addr> {
+    let mut ips = Vec::new();
+    
+    if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
+        for iface in interfaces {
+            if !iface.is_loopback() {
+                if let std::net::IpAddr::V4(ip) = iface.ip() {
+                    if !ips.contains(&ip) {
+                        ips.push(ip);
                     }
                 }
             }
@@ -1286,6 +1281,7 @@ fn parse_ping_latency(output: &str) -> Option<f64> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    configure_system_firewall();
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_shell::init())

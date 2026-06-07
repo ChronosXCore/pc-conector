@@ -47,5 +47,6 @@ arboard = "2"
 # --- Utilities ---
 dirs-next = "2"
 whoami = "1"
+get_if_addrs = "0.5"
 
 [patch.crates-io]
