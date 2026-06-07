@@ -6,6 +6,7 @@ import ServicesPanel from './ServicesPanel'
 import AudioPanel from './AudioPanel'
 import SettingsPanel from './SettingsPanel'
 import type { AudioDevice, AppConfig, Tab } from './types'
+import ShareModal from './ShareModal'
 import {
   DashboardIcon,
   ScreensIcon,
@@ -28,6 +29,9 @@ export default function App() {
   const [audioOutputs, setAudioOutputs] = useState<AudioDevice[]>([])
   const [statusMessage, setStatusMessage] = useState('Listo para conectar')
   const [isSearching, setIsSearching] = useState(false)
+  const [isFreeSearch, setIsFreeSearch] = useState(false)
+  const [shareModalOpen, setShareModalOpen] = useState(false)
+  const [shareTargetIp, setShareTargetIp] = useState('')
 
   useEffect(() => {
     loadConfig()
@@ -70,14 +74,25 @@ export default function App() {
   const handleDiscover = async () => {
     try {
       setIsSearching(true)
-      setStatusMessage('Buscando PCs en la red...')
-      const found = await invoke<string[]>('start_discovery')
-      setPeers(found)
-      setIsSearching(false)
-      if (found.length > 0) {
-        setStatusMessage(`Se encontraron ${found.length} PC(s) en la red`)
+      setStatusMessage('Buscando dispositivos en la red...')
+      if (isFreeSearch) {
+        const found = await invoke<string[]>('start_free_discovery')
+        setPeers(found)
+        setIsSearching(false)
+        if (found.length > 0) {
+          setStatusMessage(`Se encontraron ${found.length} dispositivo(s) en la red (ARP)`)
+        } else {
+          setStatusMessage('No se encontraron dispositivos en la tabla ARP.')
+        }
       } else {
-        setStatusMessage('No se encontraron PCs. Asegúrate de que PC Conector este abierto en ambos equipos.')
+        const found = await invoke<string[]>('start_discovery')
+        setPeers(found)
+        setIsSearching(false)
+        if (found.length > 0) {
+          setStatusMessage(`Se encontraron ${found.length} PC(s) en la red (mDNS)`)
+        } else {
+          setStatusMessage('No se encontraron PCs con mDNS. Intenta "Búsqueda libre" o Conexión Manual.')
+        }
       }
     } catch (e) {
       setIsSearching(false)
@@ -219,9 +234,15 @@ export default function App() {
               peers={peers}
               connectedPeers={connectedPeers}
               isSearching={isSearching}
+              isFreeSearch={isFreeSearch}
+              setIsFreeSearch={setIsFreeSearch}
               onDiscover={handleDiscover}
               onConnect={handleConnect}
               onDisconnectFromPeer={handleDisconnectFromPeer}
+              onShareApp={(ip) => {
+                setShareTargetIp(ip)
+                setShareModalOpen(true)
+              }}
             />
           )}
           {activeTab === 'screens' && config && (
@@ -252,6 +273,12 @@ export default function App() {
           )}
         </div>
       </main>
+
+      <ShareModal 
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        ipAddress={shareTargetIp}
+      />
     </div>
   )
 }
@@ -262,18 +289,26 @@ function Dashboard({
   peers,
   connectedPeers,
   isSearching,
+  isFreeSearch,
+  setIsFreeSearch,
   onDiscover,
   onConnect,
-  onDisconnectFromPeer
+  onDisconnectFromPeer,
+  onShareApp
 }: {
   connected: boolean
   peers: string[]
   connectedPeers: string[]
   isSearching: boolean
+  isFreeSearch: boolean
+  setIsFreeSearch: (val: boolean) => void
   onDiscover: () => void
   onConnect: (addr: string) => void
   onDisconnectFromPeer: (addr: string) => void
+  onShareApp: (ip: string) => void
 }) {
+  const [manualIp, setManualIp] = useState('')
+
   return (
     <div className="panel">
       <h2>Panel Principal</h2>
@@ -291,6 +326,16 @@ function Dashboard({
           </div>
         </div>
 
+        <label className="search-config">
+          <input
+            type="checkbox"
+            checked={isFreeSearch}
+            onChange={(e) => setIsFreeSearch(e.target.checked)}
+            disabled={isSearching}
+          />
+          <span>Búsqueda libre (Tabla ARP)</span>
+        </label>
+
         <button
           className="btn btn-primary btn-large"
           onClick={onDiscover}
@@ -301,20 +346,47 @@ function Dashboard({
         </button>
       </div>
 
+      <div className="manual-connect-card">
+        <h3>Conexión manual por IP</h3>
+        <div className="manual-connect-form">
+          <input
+            type="text"
+            placeholder="Ej: 192.168.1.15"
+            value={manualIp}
+            onChange={(e) => setManualIp(e.target.value)}
+            className="manual-input"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && manualIp) {
+                onConnect(manualIp);
+              }
+            }}
+          />
+          <button
+            className="btn btn-primary"
+            onClick={() => onConnect(manualIp)}
+            disabled={!manualIp}
+          >
+            Conectar
+          </button>
+        </div>
+      </div>
+
       {peers.length === 0 && !connected && !isSearching && (
         <div className="empty-state">
           <div className="empty-icon">
             <InfoIcon size={28} />
           </div>
-          <p>No se encontraron PCs en la red local. Haz clic en el botón de arriba para comenzar a buscar.</p>
+          <p>No se encontraron PCs en la red local. Haz clic en el botón de arriba para comenzar a buscar o usa Conexión manual por IP.</p>
         </div>
       )}
 
       {peers.length > 0 && !isSearching && (
         <div className="peers-list">
-          <h3>PCs Encontrados</h3>
+          <h3>{isFreeSearch ? 'Dispositivos locales (ARP)' : 'PCs con PC Conector (mDNS)'}</h3>
           {peers.map((peer, i) => {
-            const addr = peer.split(' - ')[1] || peer;
+            const parts = peer.split(' - ');
+            const name = parts[0] || peer;
+            const addr = parts[1] || peer;
             const isPeerConnected = connectedPeers.includes(addr);
             return (
               <div key={i} className="peer-card">
@@ -324,7 +396,7 @@ function Dashboard({
                   </span>
                   <div className="peer-details">
                     <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <span className="peer-name">{peer.split(' - ')[0] || peer}</span>
+                      <span className="peer-name">{parts[1] ? name : 'Dispositivo Local'}</span>
                       {isPeerConnected && (
                         <span style={{
                           fontSize: '11px',
@@ -342,26 +414,49 @@ function Dashboard({
                     <span className="peer-address">{addr}</span>
                   </div>
                 </div>
-                {isPeerConnected ? (
-                  <button
-                    className="btn btn-danger btn-small"
-                    onClick={() => onDisconnectFromPeer(addr)}
-                  >
-                    Desconectar
-                  </button>
-                ) : (
-                  <button
-                    className="btn btn-primary btn-small"
-                    onClick={() => onConnect(peer)}
-                  >
-                    Conectar
-                  </button>
-                )}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {isFreeSearch && (
+                    <button
+                      className="btn btn-primary btn-small"
+                      onClick={() => onShareApp(addr)}
+                      style={{ background: 'rgba(139, 92, 246, 0.12)', color: 'var(--accent)', boxShadow: 'none' }}
+                    >
+                      Compartir
+                    </button>
+                  )}
+                  {isPeerConnected ? (
+                    <button
+                      className="btn btn-danger btn-small"
+                      onClick={() => onDisconnectFromPeer(addr)}
+                    >
+                      Desconectar
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-primary btn-small"
+                      onClick={() => onConnect(peer)}
+                    >
+                      Conectar
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
       )}
+
+      <div className="help-card">
+        <h4><InfoIcon size={16} /> ¿Problemas para conectar?</h4>
+        <p>
+          Si no ves los equipos o no conectan, es muy probable que el Firewall de Windows o Linux esté bloqueando la conexión.
+        </p>
+        <ul className="help-list">
+          <li><strong>Windows Firewall:</strong> Asegúrate de permitir el programa <code>app.exe</code> en redes Privadas.</li>
+          <li><strong>Linux (UFW):</strong> Habilita los puertos de red: <code>sudo ufw allow 9876/udp</code> y <code>sudo ufw allow 5353/udp</code>.</li>
+          <li><strong>IP Directa:</strong> Puedes saltar el descubrimiento escribiendo la IP de la otra PC en el cuadro de arriba "Conexión manual por IP".</li>
+        </ul>
+      </div>
     </div>
   )
 }

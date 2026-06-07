@@ -221,6 +221,79 @@ fn start_discovery(state: tauri::State<AppState>) -> Result<Vec<String>, String>
     Ok(peer_names)
 }
 
+fn parse_ips_from_arp_output(output: &str) -> Vec<String> {
+    let mut ips = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+        if let Ok(ip) = parts[0].parse::<std::net::Ipv4Addr>() {
+            if is_valid_local_ip(&ip) {
+                ips.push(ip.to_string());
+            }
+        } else if parts.len() >= 2 {
+            if let Ok(ip) = parts[1].parse::<std::net::Ipv4Addr>() {
+                if is_valid_local_ip(&ip) {
+                    ips.push(ip.to_string());
+                }
+            }
+        }
+    }
+    ips
+}
+
+fn is_valid_local_ip(ip: &std::net::Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    if ip.is_loopback() {
+        return false;
+    }
+    if ip.is_multicast() {
+        return false;
+    }
+    if octets == [255, 255, 255, 255] {
+        return false;
+    }
+    if octets[3] == 0 || octets[3] == 255 {
+        return false;
+    }
+    true
+}
+
+#[tauri::command]
+async fn start_free_discovery() -> Result<Vec<String>, String> {
+    let mut ips = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("arp").arg("-a").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            ips.extend(parse_ips_from_arp_output(&stdout));
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(content) = std::fs::read_to_string("/proc/net/arp") {
+            ips.extend(parse_ips_from_arp_output(&content));
+        } else {
+            if let Ok(output) = std::process::Command::new("arp").arg("-an").output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                ips.extend(parse_ips_from_arp_output(&stdout));
+            } else if let Ok(output) = std::process::Command::new("arp").arg("-a").output() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                ips.extend(parse_ips_from_arp_output(&stdout));
+            }
+        }
+    }
+
+    ips.sort();
+    ips.dedup();
+
+    info!("Búsqueda libre completada. IPs encontradas: {:?}", ips);
+    Ok(ips)
+}
+
 #[tauri::command]
 fn connect_to_peer(addr: String, state: tauri::State<AppState>) -> Result<String, String> {
     info!("Conectando a {}...", addr);
@@ -402,6 +475,7 @@ fn stop_services(state: tauri::State<AppState>) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
@@ -472,6 +546,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_discovery,
+            start_free_discovery,
             connect_to_peer,
             disconnect_from_peer,
             disconnect,
