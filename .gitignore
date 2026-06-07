@@ -1,0 +1,25 @@
+# Local caches and environment (avoid committing gigabytes of tools/caches)
+.rustup/
+rustup-home/
+cargo-cache/
+npm-cache/
+npm-prefix/
+
+# Standard Tauri / Rust / Node ignores
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/target/
+**/gen/schemas
+
+# VS Code / Editor config
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.log

@@ -1,0 +1,7 @@
+[build]
+target = "x86_64-pc-windows-gnu"
+# target-dir = "F:/pc-conector-target"
+
+[target.x86_64-pc-windows-gnu]
+linker = "F:/msys64/mingw64/bin/gcc.exe"
+ar = "F:/msys64/mingw64/bin/ar.exe"
