@@ -286,14 +286,12 @@ fn configure_system_firewall() {
     #[cfg(target_os = "windows")]
     {
         info!("Intentando configurar cortafuegos en Windows...");
-        // Añadir regla en el cortafuegos de Windows para puertos 9876 y 5353
-        let cmd = "New-NetFirewallRule -DisplayName 'PC Conector' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 9876,5353 -ErrorAction SilentlyContinue";
         let _ = std::process::Command::new("powershell")
             .args([
                 "-NoProfile",
                 "-WindowStyle", "Hidden",
                 "-Command",
-                &format!("Start-Process powershell -ArgumentList '-NoProfile -WindowStyle Hidden -Command \"{}\"' -Verb RunAs", cmd)
+                "Start-Process netsh -ArgumentList 'advfirewall firewall add rule name=\"PC Conector\" dir=in action=allow protocol=UDP localport=9876,5353' -Verb RunAs -ErrorAction SilentlyContinue"
             ])
             .status();
     }
