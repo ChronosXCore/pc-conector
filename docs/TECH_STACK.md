@@ -49,9 +49,10 @@
 | `enigo` | Input Share | Simulación de eventos de mouse y teclado |
 | `rdev` | Input Share | Captura de eventos globales del sistema |
 | `cpal` | Audio | Captura y reproducción de audio (plataforma-nativo) |
-| `symphonia` | Audio | Decodificación y streaming de audio |
+| `opus` | Audio | Codificación y compresión de audio de baja latencia |
 | `mdns-sd` | Red | Descubrimiento automático vía mDNS/Zeroconf |
-| `tokio-tungstenite` | Red | WebSockets para comunicación en tiempo real |
+| `quinn` | Red | Comunicación fiable y ultra rápida mediante protocolo QUIC sobre UDP |
+| `rustls` / `rcgen` | Red | Seguridad TLS 1.3 y generación de certificados efímeros al vuelo |
 
 ---
 
@@ -61,25 +62,20 @@
 graph LR
     subgraph Protocolos["Protocolos de Red"]
         mDNS["📡 mDNS\nUDP 5353\nDescubrimiento"]
-        WS["🔌 WebSocket/TLS\nTCP 24800\nPortapapeles · Control"]
-        UDP["🎵 UDP Raw\n24801-24810\nAudio Opus"]
+        QUIC["⚡ QUIC (TLS 1.3)\nUDP 9876\nPortapapeles · Control · Audio"]
     end
 
     PCA["🖥️ PC A"] <-->|"Auto-descubrimiento"| mDNS
     mDNS <-->|"Auto-descubrimiento"| PCB["💻 PC B"]
     
-    PCA <-->|"Datos fiables"| WS
-    WS <-->|"Datos fiables"| PCB
-    
-    PCA <-->|"Baja latencia"| UDP
-    UDP <-->|"Baja latencia"| PCB
+    PCA <-->|"Túnel seguro de datos"| QUIC
+    QUIC <-->|"Túnel seguro de datos"| PCB
 ```
 
 | Protocolo | Puerto | Uso | Por qué |
 |-----------|:------:|-----|---------|
 | mDNS (RFC 6762) | 5353 | Descubrimiento automático en LAN | Sin configuración manual de IP |
-| WebSocket (TLS) | 24800 | Señalización, comandos, portapapeles | Confiable, full-duplex, seguro |
-| UDP | 24801-24810 | Streaming de audio | Baja latencia, no importa pérdida mínima |
+| QUIC (TLS 1.3) | 9876 | Señalización, comandos, portapapeles, input y audio | Confiable (Multiplexado), cifrado TLS integrado, extremadamente rápido sobre UDP |
 
 ---
 
@@ -99,13 +95,13 @@ graph LR
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                     PC Conector                          │
+│                       NetBridge                          │
 │                                                          │
 │  ┌────────────────────────────────────────────────────┐  │
 │  │           🎨 Frontend (React + Vite)               │  │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────────────┐   │  │
-│  │  │  Config   │ │  Status  │ │   Monitor Grid   │   │  │
-│  │  │   Panel   │ │  Panel   │ │  (Drag & Drop)   │   │  │
+│  │  │  Config   │ │  Status  │ │  Screen Canvas   │   │  │
+│  │  │  Panel   │ │  Panel   │ │  (Local+Remote)  │   │  │
 │  │  └──────────┘ └──────────┘ └──────────────────┘   │  │
 │  └─────────────────────┬──────────────────────────────┘  │
 │                        │ Tauri IPC                        │
@@ -114,7 +110,7 @@ graph LR
 │  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌────────┐  │  │
 │  │  │ Network  │ │Clipboard │ │ Input  │ │ Audio  │  │  │
 │  │  │ Manager  │ │  Sync    │ │ Share  │ │ Stream │  │  │
-│  │  │ (mDNS+WS)│ │(arboard) │ │rdev+en │ │cpal+Op │  │  │
+│  │  │(mDNS+QUIC)││(arboard) │ │rdev+en │ │cpal+Op │  │  │
 │  │  └──────────┘ └──────────┘ └────────┘ └────────┘  │  │
 │  └────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘

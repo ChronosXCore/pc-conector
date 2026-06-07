@@ -45,10 +45,10 @@ graph LR
     end
 
     A_DISC <-->|"UDP 5353 · mDNS"| B_DISC
-    A_CLIP <-->|"TCP 24800 · WebSocket"| B_CLIP
-    A_INP  <-->|"UDP · Input Events"| B_INP
-    A_AUD  <-->|"UDP 24801-24810 · Opus"| B_AUD
-    A_CFG  <-->|"TCP 24800 · WebSocket"| B_CFG
+    A_CLIP <-->|"UDP 9876 · QUIC (TLS)"| B_CLIP
+    A_INP  <-->|"UDP 9876 · QUIC (TLS)"| B_INP
+    A_AUD  <-->|"UDP 9876 · QUIC (TLS)"| B_AUD
+    A_CFG  <-->|"UDP 9876 · QUIC (TLS)"| B_CFG
 ```
 
 ---
@@ -156,8 +156,7 @@ sequenceDiagram
 | Puerto | Protocolo | Servicio | Dirección |
 |:------:|:---------:|---------|:---------:|
 | `5353` | UDP | mDNS — Descubrimiento | Broadcast LAN |
-| `24800` | TCP/WS | WebSocket — Señalización, clipboard, config | Bidireccional |
-| `24801–24810` | UDP | Streaming de audio (Opus) | Bidireccional |
+| `9876` | UDP | QUIC — Conexión principal cifrada (TLS) | Bidireccional |
 
 ---
 

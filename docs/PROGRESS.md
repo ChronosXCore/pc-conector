@@ -117,6 +117,7 @@ gantt
 | Inicial | v0.1.0 | Creación del proyecto y documentación | ✅ |
 | Fase 1-4 | v0.5.0 | Funciones core: Input, Clipboard, Audio, mDNS | ✅ |
 | Pulido Final | v1.0.0 | Modo oscuro/claro, panel de rendimiento, íconos SVG, detección de marcas | ✅ |
+| 2026-06-07 | v1.1.0 | Rebranding a NetBridge, Vinculación persistente, auto-conexión, barra de conectados, y layout multipantalla multi-PC | ✅ |
 
 ---
 

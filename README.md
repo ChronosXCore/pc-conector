@@ -1,15 +1,17 @@
 <div align="center">
 
-<img src="Logo.png" alt="PC Conector Logo" width="140" height="140" />
+<img src="Logo.png" alt="NetBridge Logo" width="160" height="160" style="border-radius: 24px; box-shadow: 0 10px 30px rgba(124, 58, 237, 0.3); border: 2px solid rgba(124, 58, 237, 0.4);" />
 
-# NetBridge · PC Conector
+# 🌉 NetBridge
 
-**Conecta tus PCs. Comparte sin límites.**
-*Connect your PCs. Share without limits.*
+### **Conexión Total · Control Fluido · Compartición sin Fronteras**
+*One Keyboard, One Mouse, One Clipboard — for all your PCs.*
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-7c3aed.svg?style=for-the-badge)](LICENSE)
+---
+
+[![License](https://img.shields.io/badge/Licencia-Apache_2.0-7c3aed.svg?style=for-the-badge)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-ffc131?style=for-the-badge&logo=tauri&logoColor=white)](https://tauri.app)
-[![Rust](https://img.shields.io/badge/Rust-1.x-ce422b?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/Rust-1.75+-ce422b?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![React](https://img.shields.io/badge/React-19-61dafb?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 
@@ -25,294 +27,293 @@
 
 ---
 
-## 🌟 ¿Qué es PC Conector?
+<div align="center">
 
-**PC Conector** (también llamado **NetBridge**) es una aplicación de escritorio **moderna, ultraliviana y multiplataforma** que unifica tu flujo de trabajo conectando dos computadoras dentro de tu red local.
+## 🌟 ¿Qué es NetBridge?
 
-> *Think of it as having one keyboard, one mouse, one clipboard — for all your PCs.*
+**NetBridge** (anteriormente *PC Conector*) es una herramienta de escritorio **moderna, ultraliviana y de alto rendimiento** diseñada para unificar el flujo de trabajo entre múltiples computadoras en tu red local. 
 
-Construida con **Tauri 2 (Rust) + React 19 + TypeScript**, ofrece rendimiento nativo, diseño premium con glassmorphism y cero dependencia de servidores externos.
+Con un diseño premium con transparencias (Glassmorphism), transiciones fluidas y un backend nativo ultrarrápido en Rust, NetBridge te permite controlar varios equipos como si fuesen una sola máquina multipantalla, con total privacidad y sin depender de servidores externos.
+
+</div>
 
 ---
 
-## ✨ Características
+<div align="center">
 
-<table>
+## ✨ Características Principales
+
+</div>
+
+<table align="center" style="margin: 0 auto; text-align: center;">
   <tr>
-    <td align="center" width="200">
-      <h3>🖱️ Mouse & Teclado</h3>
-      <p>Desliza el cursor más allá del borde de tu pantalla y controla el otro PC sin interrupciones</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">🖱️ Compartir Mouse & Teclado</h3>
+      <p align="center">Desliza el cursor del mouse más allá del borde de tu pantalla local para controlar el PC remoto de forma transparente.</p>
     </td>
-    <td align="center" width="200">
-      <h3>📋 Portapapeles</h3>
-      <p>Copia texto en un PC y pégalo instantáneamente en el otro. Latencia &lt;200ms</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">📋 Portapapeles Sincronizado</h3>
+      <p align="center">Copia texto o archivos en una PC y pégalos en la otra al instante. Latencia ultra baja menor a 200ms.</p>
     </td>
-    <td align="center" width="200">
-      <h3>🔊 Audio en Vivo</h3>
-      <p>Comparte micrófono o salida de audio entre dispositivos con bajísima latencia usando Opus</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">🔊 Audio Stream en Tiempo Real</h3>
+      <p align="center">Transmite la salida de audio o el micrófono entre tus dispositivos locales con compresión Opus de alta fidelidad.</p>
     </td>
   </tr>
   <tr>
-    <td align="center" width="200">
-      <h3>📡 Auto-Descubrimiento</h3>
-      <p>Detección automática de dispositivos en la red local via mDNS. Sin configuración manual de IPs</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">📡 Auto-Descubrimiento & Link</h3>
+      <p align="center">Detección automática por mDNS. Vincula tus PCs de confianza para que se auto-conecten al encenderse de fondo.</p>
     </td>
-    <td align="center" width="200">
-      <h3>🎯 Detección de Dispositivos</h3>
-      <p>Clasificación automática: Celulares, Laptops, PCs, Impresoras, TVs, Routers con íconos premium</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">🖥️ Layout Multi-PC</h3>
+      <p align="center">Configura la disposición visual de las pantallas locales (azul) y remotas (morado) arrastrándolas libremente.</p>
     </td>
-    <td align="center" width="200">
-      <h3>📊 Monitor de Red</h3>
-      <p>Gráfica de latencia en vivo, Hostname, IPs locales y métricas detalladas en tiempo real</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">🔌 Barra de Control Rápido</h3>
+      <p align="center">Chips visuales en el dashboard para ver el estado del enlace y desconectar de inmediato con un solo clic.</p>
     </td>
   </tr>
   <tr>
-    <td align="center" width="200">
-      <h3>🌙 Tema Oscuro/Claro</h3>
-      <p>Alternador rápido persistente con transiciones CSS fluidas. Glassmorphism y sombras neon</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">🔍 Búsqueda Libre Activa</h3>
+      <p align="center">Ping Sweep y ARP dinámico para encontrar y conectar equipos en redes locales con cortafuegos estrictos.</p>
     </td>
-    <td align="center" width="200">
-      <h3>🔒 Seguro</h3>
-      <p>Comunicación cifrada SSL/TLS. Autenticación de dispositivos. Solo accesible en red local</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">🛡️ Firewall Asistido</h3>
+      <p align="center">NetBridge solicita elevación y configura reglas automáticas en Windows (netsh) y Linux (UFW/Firewalld) para abrir puertos.</p>
     </td>
-    <td align="center" width="200">
-      <h3>⚡ Ultraliviano</h3>
-      <p>CPU &lt;5% en reposo, RAM &lt;200MB. Compilado en Rust nativo. Sin Electron</p>
+    <td align="center" width="280" style="padding: 15px; border: 1px solid rgba(124, 58, 237, 0.2); border-radius: 8px; background: rgba(99, 179, 237, 0.02);">
+      <h3 align="center">⚡ Rendimiento Nativo Rust</h3>
+      <p align="center">Uso de CPU menor a 5% en reposo y consumo de memoria inferior a 200MB. Cero consumo innecesario.</p>
     </td>
   </tr>
 </table>
 
 ---
 
-## 🏗️ Arquitectura
+<div align="center">
 
-PC Conector sigue una arquitectura **peer-to-peer descentralizada**. Cada instancia actúa simultáneamente como servidor y cliente.
+## 🏗️ Arquitectura de Red
+
+NetBridge opera mediante un modelo **Peer-to-Peer (P2P)** descentralizado y seguro, en el cual cada instancia actúa simultáneamente como servidor y cliente de señalización.
 
 ```mermaid
 graph TB
-    subgraph PCA["🖥️ PC A (Host)"]
+    subgraph PCA["🖥️ PC A (Host / Local)"]
         direction TB
-        A_UI["⚛️ React UI"]
-        A_NET["📡 Network Manager\nmDNS Discovery"]
-        A_CLIP["📋 Clipboard Sync"]
+        A_UI["⚛️ React UI (Vite)"]
+        A_NET["📡 Network Manager\nmDNS Discovery & QUIC"]
+        A_CLIP["📋 Clipboard Sync (arboard)"]
         A_INPUT["🖱️ Input Share\nrdev + enigo"]
         A_AUDIO["🔊 Audio Stream\nCPAL + Opus"]
     end
 
-    subgraph PCB["💻 PC B (Client)"]
+    subgraph PCB["💻 PC B (Client / Remoto)"]
         direction TB
-        B_UI["⚛️ React UI"]
-        B_NET["📡 Network Manager\nmDNS Discovery"]
-        B_CLIP["📋 Clipboard Sync"]
+        B_UI["⚛️ React UI (Vite)"]
+        B_NET["📡 Network Manager\nmDNS Discovery & QUIC"]
+        B_CLIP["📋 Clipboard Sync (arboard)"]
         B_INPUT["🖱️ Input Share\nrdev + enigo"]
         B_AUDIO["🔊 Audio Stream\nCPAL + Opus"]
     end
 
     A_NET <-->|"mDNS (UDP 5353)"| B_NET
-    A_CLIP <-->|"WebSocket (TCP 24800)"| B_CLIP
-    A_INPUT <-->|"TCP — Input events"| B_INPUT
-    A_AUDIO <-->|"UDP 24801-24810"| B_AUDIO
+    A_NET <-->|"QUIC Connection (UDP 9876)"| B_NET
+    A_CLIP <-->|"Sincronización de Clipboard"| B_CLIP
+    A_INPUT <-->|"Eventos de Mouse y Teclado"| B_INPUT
+    A_AUDIO <-->|"Transmisión de Audio (Opus)"| B_AUDIO
 
     A_UI --> A_NET & A_CLIP & A_INPUT & A_AUDIO
     B_UI --> B_NET & B_CLIP & B_INPUT & B_AUDIO
 
-    style PCA fill:#1e1b4b,stroke:#7c3aed,color:#e9d5ff
-    style PCB fill:#1e1b4b,stroke:#7c3aed,color:#e9d5ff
+    style PCA fill:#13112c,stroke:#7c3aed,color:#e9d5ff,stroke-width:2px
+    style PCB fill:#13112c,stroke:#9a72f3,color:#e9d5ff,stroke-width:2px
 ```
 
-### Puertos utilizados
+### Puertos Utilizados
 
-| Puerto | Protocolo | Servicio |
-|:------:|:---------:|---------|
-| `5353` | UDP | mDNS — Descubrimiento automático |
-| `24800` | TCP/WS | WebSocket — Señalización y portapapeles |
-| `24801–24810` | UDP | Streaming de audio (Opus) |
+| Puerto | Protocolo | Servicio | Propósito |
+|:------:|:---------:|---------|-----------|
+| **`5353`** | UDP | mDNS | Anuncio y auto-descubrimiento en red local |
+| **`9876`** | UDP | QUIC / NetBridge Protocol | Conexión principal cifrada: portapapeles, mouse y pantallas |
+
+</div>
 
 ---
+
+<div align="center">
 
 ## 🛠️ Stack Tecnológico
 
-| Capa | Tecnología | Propósito |
-|------|-----------|-----------|
-| **Frontend** | ![React](https://img.shields.io/badge/React_19-61dafb?logo=react&logoColor=black&style=flat-square) | Interfaz de usuario moderna |
-| **Lenguaje UI** | ![TypeScript](https://img.shields.io/badge/TypeScript_5-3178c6?logo=typescript&logoColor=white&style=flat-square) | Tipado estático y DX superior |
-| **Build Tool** | ![Vite](https://img.shields.io/badge/Vite_8-646cff?logo=vite&logoColor=white&style=flat-square) | Dev server ultrarrápido |
-| **Framework Desktop** | ![Tauri](https://img.shields.io/badge/Tauri_2-ffc131?logo=tauri&logoColor=white&style=flat-square) | Shell nativo sin Electron |
-| **Backend** | ![Rust](https://img.shields.io/badge/Rust-ce422b?logo=rust&logoColor=white&style=flat-square) | Rendimiento y seguridad nativa |
-| **Audio** | `CPAL + Opus` | Captura y codec de baja latencia |
-| **Input** | `rdev + enigo` | Captura y simulación de eventos |
-| **Clipboard** | `arboard` | Portapapeles multiplataforma |
-| **Red** | `mDNS + WebSocket + UDP` | Descubrimiento y comunicación P2P |
-| **Estilo** | `CSS Puro` | Glassmorphism, neon, variables de tema |
+| Componente | Tecnología | Uso en el Proyecto |
+|:---|:---|:---|
+| **Frontend** | ![React](https://img.shields.io/badge/React_19-61dafb?logo=react&logoColor=black&style=flat-square) | Lógica e interfaz interactiva del Dashboard |
+| **Lógica UI** | ![TypeScript](https://img.shields.io/badge/TypeScript_5-3178c6?logo=typescript&logoColor=white&style=flat-square) | Tipado robusto y definición de layouts y dispositivos |
+| **Entorno Compilación** | ![Vite](https://img.shields.io/badge/Vite_8-646cff?logo=vite&logoColor=white&style=flat-square) | Empaquetado rápido y Hot Module Replacement |
+| **Plataforma Desktop** | ![Tauri](https://img.shields.io/badge/Tauri_2-ffc131?logo=tauri&logoColor=white&style=flat-square) | Puente nativo seguro, Webview ligero y llamadas a comandos Rust |
+| **Lenguaje Core** | ![Rust](https://img.shields.io/badge/Rust-ce422b?logo=rust&logoColor=white&style=flat-square) | Backend, captura de inputs, encriptación, y sockets UDP de alta velocidad |
+| **Seguridad de Red** | `rustls` | Conexión cifrada TLS sobre protocolo de transporte QUIC |
+| **Estilización** | `Vanilla CSS` | Diseño de interfaz premium oscuro, animaciones de radar y glows HSL |
+
+</div>
 
 ---
 
-## 📂 Estructura del Repositorio
+<div align="center">
 
-```
+## 📂 Estructura del Proyecto
+
+</div>
+
+```text
 📦 pc-conector/
-├── 📁 pc-conector/          # Código fuente (Frontend React + Backend Rust/Tauri)
-│   ├── 📁 src/              # Componentes React y lógica UI
-│   ├── 📁 src-tauri/        # Backend Rust: módulos de red, audio, input
-│   └── 📄 package.json      # Dependencias y scripts npm
-│
-├── 📁 para-linux/           # Instalación rápida en Linux
-│   └── 📄 AGENTE_PROMPT.md  # Prompt para instalación autónoma con IA
-│
-├── 📁 docs/                 # Documentación detallada
-│   ├── 📄 ARCHITECTURE.md   # Arquitectura del sistema
-│   ├── 📄 TECH_STACK.md     # Stack tecnológico detallado
-│   ├── 📄 PROGRESS.md       # Progreso del desarrollo
-│   ├── 📄 VISION.md         # Visión y objetivos del proyecto
-│   └── 📄 REQUIREMENTS.md   # Requisitos funcionales y técnicos
-│
-├── 📄 README.md             # Este archivo
-├── 📄 CONTRIBUTING.md       # Guía para contribuidores
-├── 📄 SECURITY.md           # Política de seguridad
-├── 📄 LICENSE               # Licencia Apache 2.0
-└── 🖼️ Logo.png              # Logotipo oficial
+├── 📁 pc-conector/          # Proyecto principal
+│   ├── 📁 src/              # Componentes de frontend (React + TS)
+│   │   ├── 📄 App.tsx       # Contenedor y panel central
+│   │   ├── 📄 App.css       # Estilos visuales de NetBridge
+│   │   ├── 📄 ScreenArrangement.tsx # Canvas interactivo de pantallas
+│   │   └── 📄 LinkedDevicesPanel.tsx # Panel de vinculación y autoconect
+│   ├── 📁 src-tauri/        # Backend nativo de la aplicación (Rust)
+│   │   ├── 📁 src/          # Código fuente Rust (red, input, config)
+│   │   └── 📄 tauri.conf.json # Configuración de la ventana y el compilador
+│   └── 📄 package.json      # Dependencias frontend y scripts de inicio
+├── 📁 para-linux/           # Herramientas de despliegue para Linux
+│   └── 📄 AGENTE_PROMPT.md  # Instrucciones autónomas para agentes de IA
+├── 📁 docs/                 # Documentación técnica completa
+└── 🖼️ Logo.png              # Logotipo oficial de NetBridge
 ```
 
 ---
 
-## 🚀 Instalación
+<div align="center">
 
-### Prerrequisitos
+## 🚀 Instalación y Despliegue
 
-- [Node.js](https://nodejs.org/) ≥ 18 (incluye `npm`)
-- [Rust](https://rustup.rs/) ≥ 1.75 (instalado vía Rustup)
+### Requisitos Previos
+* **Node.js** ≥ 18 (con `npm`)
+* **Rust & Cargo** ≥ 1.75 (instalar mediante [rustup](https://rustup.rs/))
+
+---
 
 ### 🪟 Windows (10/11)
+
+Abra PowerShell e ingrese los siguientes comandos para instalar y ejecutar:
 
 ```powershell
 # 1. Clonar el repositorio
 git clone https://github.com/ChronosXCore/pc-conector.git
 cd pc-conector/pc-conector
 
-# 2. Instalar dependencias frontend
+# 2. Instalar dependencias
 npm install
 
-# 3. Ejecutar en modo desarrollo
+# 3. Lanzar en modo desarrollo
 npm run tauri dev
 ```
 
-> **Nota:** Si es la primera vez, Rust compilará las dependencias nativas (~5-10 min). Las ejecuciones siguientes son inmediatas.
+*Nota: La primera ejecución requiere compilar las librerías nativas de Rust y puede tardar unos minutos.*
 
-### 🐧 Linux (Arch / Ubuntu / Fedora)
+---
 
-#### Arch Linux / CachyOS / Omarchy Linux
+### 🐧 Linux (Arch / Ubuntu / Debian / Mint)
 
+#### Ubuntu / Debian / Linux Mint
 ```bash
-# Instalar dependencias del sistema
-sudo pacman -S --needed base-devel nodejs npm webkit2gtk-4.1 libappindicator-gtk3 librsvg openssl
+# 1. Instalar librerías de desarrollo nativas de Tauri y GTK
+sudo apt update && sudo apt install -y \
+  build-essential curl libssl-dev libwebkit2gtk-4.1-dev \
+  libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf nodejs npm git
 
-# Instalar Rust (si no lo tienes)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# 2. Instalar Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 
-# Clonar y ejecutar
+# 3. Clonar y lanzar
 git clone https://github.com/ChronosXCore/pc-conector.git
 cd pc-conector/pc-conector
-npm install && npm run tauri dev
+npm install
+npm run tauri dev
 ```
 
-#### Ubuntu / Debian
-
+#### Arch Linux / CachyOS / Manjaro
 ```bash
-sudo apt update && sudo apt install -y \
-  build-essential curl libssl-dev \
-  libwebkit2gtk-4.1-dev libgtk-3-dev \
-  libappindicator3-dev librsvg2-dev patchelf \
-  nodejs npm
+# 1. Instalar dependencias nativas
+sudo pacman -S --needed base-devel nodejs npm webkit2gtk-4.1 libappindicator-gtk3 librsvg openssl git
 
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# 2. Instalar Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 
+# 3. Clonar y lanzar
 git clone https://github.com/ChronosXCore/pc-conector.git
-cd pc-conector/pc-conector && npm install && npm run tauri dev
+cd pc-conector/pc-conector
+npm install
+npm run tauri dev
 ```
 
----
-
-## 🤖 Instalación con Agente de IA (Un Solo Paso)
-
-¿Tienes un agente de IA en tu otro PC con Linux? Copia el contenido de [`para-linux/AGENTE_PROMPT.md`](para-linux/AGENTE_PROMPT.md) y pégalo en el chat del agente. Él se encargará de todo automáticamente:
-
-1. ✅ Clonar el repositorio
-2. ✅ Instalar dependencias nativas del sistema
-3. ✅ Compilar el backend en Rust
-4. ✅ Dejar la aplicación ejecutándose
-
----
-
-## 📚 Documentación
-
-| Documento | Descripción |
-|-----------|-------------|
-| [📐 Arquitectura](docs/ARCHITECTURE.md) | Diseño del sistema, módulos y flujo de conexión |
-| [🛠️ Tech Stack](docs/TECH_STACK.md) | Todas las tecnologías y dependencias usadas |
-| [📊 Progreso](docs/PROGRESS.md) | Estado actual y registro de cambios |
-| [🔭 Visión](docs/VISION.md) | Objetivos, inspiración y principios de diseño |
-| [📋 Requisitos](docs/REQUIREMENTS.md) | Requisitos funcionales y técnicos detallados |
-| [🤝 Contribuir](CONTRIBUTING.md) | Cómo contribuir al proyecto |
-| [🔐 Seguridad](SECURITY.md) | Política de reporte de vulnerabilidades |
-
----
-
-## 📊 Estado del Proyecto
-
-```
-Fase 0: Planificación & Diseño       ████████████████████ 100%  ✅
-Fase 1: Fundación (Tauri + Red)      ████████████████████ 100%  ✅
-Fase 2: Portapapeles                 ████████████████████ 100%  ✅
-Fase 3: Mouse & Teclado              ████████████████████ 100%  ✅
-Fase 4: Audio                        ████████████████████ 100%  ✅
-Fase 5: Diseño Premium & Pulido      ████████████████████ 100%  ✅
-```
-
-**🎉 PC Conector está completamente implementado y funcional.**
-
----
-
-## 🤝 ¿Cómo Contribuir?
-
-¡Las contribuciones son bienvenidas! Lee nuestra [guía de contribución](CONTRIBUTING.md) para empezar.
-
-```bash
-# Fork el repo, luego:
-git checkout -b feature/mi-mejora
-git commit -m "feat: descripción de mi mejora"
-git push origin feature/mi-mejora
-# Abre un Pull Request 🚀
-```
-
-Consulta los [issues abiertos](https://github.com/ChronosXCore/pc-conector/issues) para ver qué se puede mejorar.
-
----
-
-## 📜 Licencia
-
-Distribuido bajo la **Licencia Apache 2.0**. Ver [`LICENSE`](LICENSE) para más información.
-
-*Distributed under the Apache 2.0 License. See [`LICENSE`](LICENSE) for more information.*
-
----
-
-## 💡 Inspiración
-
-PC Conector se inspira en proyectos open-source como:
-- **[Input Leap](https://github.com/input-leap/input-leap)** / **Barrier** / **Synergy** — Compartir mouse y teclado
-- **[KDE Connect](https://kdeconnect.kde.org/)** — Sincronización de portapapeles
-- **[SonoBus](https://sonobus.net/)** — Streaming de audio de baja latencia
-- **Microsoft Mouse Without Borders** — Experiencia de múltiples PCs
+</div>
 
 ---
 
 <div align="center">
 
+## 🤖 Despliegue en un clic con Agente de IA
+
+¿Tienes un agente de desarrollo de IA en tu PC secundaria? Copia todo el contenido del archivo [AGENTE_PROMPT.md](para-linux/AGENTE_PROMPT.md) y pégalo directamente en su chat. El agente configurará las librerías, clonará el código, configurará el cortafuegos UFW y dejará la aplicación lista para conectarse con tu PC principal de forma autónoma.
+
+</div>
+
+---
+
+<div align="center">
+
+## 📊 Estado de Implementación
+
+| Módulo / Funcionalidad | Estado | Descripción |
+|:---|:---:|:---|
+| 🎨 **Rebranding & NetBridge UI** | **100%** | Interfaz Glassmorphism, animaciones de hover y radar local |
+| 📡 **Conectividad manual y mDNS** | **100%** | Auto-descubrimiento en LAN y conexión por IP directa |
+| 🖱️ **Input Share (Mouse / Teclado)** | **100%** | Captura y reenvío de eventos por red con latencia mínima |
+| 📋 **Portapapeles Sincronizado** | **100%** | Intercambio bidireccional en tiempo real |
+| 🔊 **Streaming de Audio** | **100%** | Captura de audio y reproducción vía Opus |
+| 🔗 **Dispositivos Vinculados** | **100%** | Auto-conexión en segundo plano persistente |
+| 🖥️ **Multi-Screen Layout canvas** | **100%** | Configuración visual de la cuadrícula de pantallas cruzadas |
+
+</div>
+
+---
+
+<div align="center">
+
+## 🤝 Contribuir al Proyecto
+
+¡Agradecemos enormemente cualquier colaboración! Si quieres proponer mejoras o solucionar bugs, sigue estos pasos:
+
+```bash
+# 1. Crea una rama para tu mejora
+git checkout -b feature/nueva-funcionalidad
+
+# 2. Sube tus cambios al repositorio
+git commit -m "feat: añade nueva característica premium"
+git push origin feature/nueva-funcionalidad
+
+# 3. Abre un Pull Request en GitHub 🚀
+```
+
+Puedes ver las tareas sugeridas y reportes en la pestaña de **[Issues](https://github.com/ChronosXCore/pc-conector/issues)**.
+
+---
+
+## 📜 Licencia
+
+NetBridge se distribuye bajo la Licencia **Apache 2.0**. Para más detalles, consulte el archivo [LICENSE](LICENSE).
+
+---
+
 **Hecho con ❤️ usando Rust 🦀 y React ⚛️**
 
-*Si este proyecto te es útil, considera darle una ⭐ en GitHub*
+*¿Te gustó NetBridge? ¡Apóyanos regalándole una ⭐ en GitHub!*
 
 [![GitHub Stars](https://img.shields.io/github/stars/ChronosXCore/pc-conector?style=social)](https://github.com/ChronosXCore/pc-conector/stargazers)
 
