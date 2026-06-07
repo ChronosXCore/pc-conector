@@ -1,36 +1,37 @@
-# AGENTE — INSTRUCCIONES DE SETUP: PC Conector (Linux)
+# 🤖 PROMPT PARA EL AGENTE DE IA (Linux / Arch Linux)
 
-Eres un agente de IA en una PC Linux. Tienes en esta misma carpeta un archivo `pc-conector.zip` con el código fuente completo de una aplicación **Tauri 2 + React 19 + TypeScript**. 
-
-Tu tarea es **descomprimir, instalar dependencias y ejecutar la app** en modo desarrollo. Sigue exactamente estos pasos en orden.
+Copia todo el texto a continuación y pégalo en el chat de tu agente de IA en la otra computadora (la que tiene Linux). Este prompt está diseñado para guiarlo paso a paso en la descarga, instalación de dependencias y ejecución de la aplicación.
 
 ---
 
-## PASO 1 — Verificar prerrequisitos del sistema
+### INICIO DEL PROMPT PARA EL AGENTE:
 
-Ejecuta estos comandos para ver qué falta:
+"Hola. Eres un agente de desarrollo de software en una PC Linux (basada en Arch Linux/CachyOS). Tu objetivo es poner en marcha la aplicación de escritorio **PC Conector (NetBridge)** (Tauri 2 + React 19 + TypeScript + Rust) en esta máquina.
+
+Puedes obtener el código de dos maneras:
+1. **Opción A (Recomendada - GitHub)**: Clonando el repositorio desde GitHub si el usuario te proporciona el enlace.
+2. **Opción B (Local - ZIP)**: Si hay un archivo `pc-conector.zip` en tu directorio de trabajo, lo descomprimirás.
+
+Sigue estos pasos detallados para completar la tarea de forma autónoma:
+
+---
+
+## 🛠️ PASO 1 — Instalar prerrequisitos y dependencias de Tauri (Arch Linux)
+
+Tauri requiere `webkit2gtk-4.1` y otras librerías nativas para compilar el backend de Rust y renderizar el frontend. Ejecuta el siguiente comando para instalarlas todas en Arch Linux / CachyOS / Manjaro:
 
 ```bash
-node --version
-npm --version
-rustc --version
-cargo --version
+sudo pacman -S --needed base-devel nodejs npm webkit2gtk-4.1 libappindicator-gtk3 librsvg openssl git
 ```
 
-**Si node/npm no están instalados**, instálalos:
-```bash
-# Ubuntu/Debian/Mint:
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt install -y nodejs
+*(Si el sistema es Ubuntu/Debian en lugar de Arch, usa: `sudo apt update && sudo apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf pkg-config build-essential libssl-dev libgtk-3-dev nodejs npm git`)*
 
-# Arch/Manjaro:
-sudo pacman -S nodejs npm
+---
 
-# Fedora:
-sudo dnf install -y nodejs npm
-```
+## 🦀 PASO 2 — Instalar/Verificar Rust
 
-**Si Rust no está instalado**, instálalo:
+Verifica si Rust está instalado ejecutando `rustc --version` y `cargo --version`. Si no lo está, instálalo con:
+
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
@@ -38,127 +39,54 @@ source "$HOME/.cargo/env"
 
 ---
 
-## PASO 2 — Instalar dependencias del sistema para Tauri
+## 📂 PASO 3 — Obtener y preparar el proyecto
 
-Tauri requiere webkit2gtk y otras librerías nativas. Instálalas:
+Pregúntale al usuario si prefiere darte la URL de su repositorio de GitHub para clonarlo, o si prefiere que uses el archivo `pc-conector.zip` si existe en tu directorio actual.
 
-```bash
-# Ubuntu/Debian/Mint:
-sudo apt update
-sudo apt install -y \
-  libwebkit2gtk-4.1-dev \
-  libappindicator3-dev \
-  librsvg2-dev \
-  patchelf \
-  pkg-config \
-  build-essential \
-  libssl-dev \
-  libgtk-3-dev
+- **Si clonas desde GitHub**:
+  ```bash
+  git clone <URL_DEL_REPOSITORIO> pc-conector-repo
+  cd pc-conector-repo/pc-conector
+  ```
+- **Si usas el ZIP local**:
+  ```bash
+  unzip pc-conector.zip -d pc-conector-temp
+  cd pc-conector-temp/pc-conector
+  ```
 
-# Arch/Manjaro:
-sudo pacman -S --needed \
-  webkit2gtk-4.1 \
-  libappindicator-gtk3 \
-  librsvg \
-  base-devel \
-  openssl
-
-# Fedora:
-sudo dnf install -y \
-  webkit2gtk4.1-devel \
-  openssl-devel \
-  libappindicator-gtk3-devel \
-  librsvg2-devel
-```
+Asegúrate de que estás en la carpeta del proyecto donde se encuentra el archivo `package.json` y la carpeta `src-tauri/`.
 
 ---
 
-## PASO 3 — Descomprimir el proyecto
+## 📦 PASO 4 — Instalar dependencias de Node.js
 
-La carpeta donde está este archivo es tu directorio de trabajo. Descomprime aquí:
-
-```bash
-# Situate en la carpeta donde está este archivo y el ZIP:
-cd /ruta/donde/esta/este/archivo
-
-unzip pc-conector.zip -d pc-conector
-cd pc-conector
-```
-
-La estructura extraída debe verse así:
-```
-pc-conector/
-├── src/              ← Frontend React + TypeScript
-├── src-tauri/        ← Backend Rust + Tauri config
-├── public/
-├── index.html
-├── package.json
-├── vite.config.ts
-└── tsconfig.json
-```
-
----
-
-## PASO 4 — Instalar dependencias de Node
+Instala las dependencias del frontend:
 
 ```bash
-# Dentro de la carpeta pc-conector/:
 npm install
 ```
 
 ---
 
-## PASO 5 — Ejecutar la app en modo desarrollo
+## 🚀 PASO 5 — Ejecutar en modo desarrollo
+
+Inicia la aplicación en modo desarrollo:
 
 ```bash
 npm run tauri dev
 ```
 
-Esto hará automáticamente:
-1. Levanta el servidor Vite (frontend React)
-2. Compila el backend Rust con Cargo
-3. Abre la ventana de la app
-
-> ⏱️ La **primera compilación de Rust** tarda entre 5-15 minutos. Las siguientes son mucho más rápidas (incremental).
+Este comando:
+1. Iniciará el servidor de desarrollo de Vite (React 19).
+2. Compilará el backend en Rust mediante Cargo (la primera compilación puede tardar de 5 a 15 minutos mientras descarga y compila los crates de Rust).
+3. Lanzará la ventana nativa de la aplicación.
 
 ---
 
-## SOLUCIÓN DE PROBLEMAS COMUNES
+## 🔍 PASO 6 — Verificación de funcionamiento
+Una vez que abra la ventana de la aplicación:
+- Confirma que se muestre el nuevo diseño con el alternador de tema claro/oscuro (☀️/🌙) en la parte superior derecha.
+- Abre la sección **Red & Rendimiento** y verifica que muestre la IP local del equipo y empiece a graficar la latencia del ping en tiempo real.
+- Confirma que no haya errores de consola en la terminal.
 
-### Error: `webkit2gtk-4.1` not found
-```bash
-# Prueba con la versión 4.0:
-sudo apt install -y libwebkit2gtk-4.0-dev
-# Y edita src-tauri/Cargo.toml si es necesario
-```
-
-### Error: `tauri-cli` no encontrado
-```bash
-npm install  # asegúrate de haber corrido esto primero
-```
-
-### Error de permisos en cargo
-```bash
-source "$HOME/.cargo/env"
-# O cierra y vuelve a abrir la terminal
-```
-
-### La app abre pero muestra pantalla en blanco
-```bash
-# El frontend no se compiló. Asegúrate de que Vite corre:
-npm run dev   # En una terminal aparte para verificar
-```
-
----
-
-## NOTAS TÉCNICAS DEL PROYECTO
-
-- **Framework**: Tauri 2 + React 19 + TypeScript
-- **Build tool**: Vite 8
-- **Puerto dev frontend**: `http://localhost:5173`
-- **Backend**: Rust (se compila automáticamente)
-- **Funcionalidad**: Conecta dos PCs en red local para compartir ratón, teclado, portapapeles y audio
-
----
-
-Una vez que la app corra, ¡el diseño ya incluye modo claro/oscuro, iconos SVG premium y animaciones fluidas! 🚀
+¡Manos a la obra! Infórmame de tu progreso en cada paso."

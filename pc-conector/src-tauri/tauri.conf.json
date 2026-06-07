@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "PC Conector",
+  "productName": "NetBridge",
   "version": "0.1.0",
   "identifier": "com.chronosxcore.pcconector",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "PC Conector",
+        "title": "NetBridge",
         "width": 1100,
         "height": 700,
         "minWidth": 900,
@@ -40,3 +40,4 @@
     }
   }
 }
+

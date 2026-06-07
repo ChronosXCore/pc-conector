@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import './App.css'
+import logoImg from './assets/logo.png'
 import ScreenArrangement from './ScreenArrangement'
 import ServicesPanel from './ServicesPanel'
 import AudioPanel from './AudioPanel'
 import SettingsPanel from './SettingsPanel'
-import type { AudioDevice, AppConfig, Tab } from './types'
+import type { AudioDevice, AppConfig, Tab, DiscoveredDevice } from './types'
 import ShareModal from './ShareModal'
+import NetworkStatsPanel from './NetworkStatsPanel'
+
 import {
   DashboardIcon,
   ScreensIcon,
@@ -16,28 +19,57 @@ import {
   LaptopIcon,
   SearchIcon,
   InfoIcon,
-  CheckIcon
+  CheckIcon,
+  MobileIcon,
+  RouterIcon,
+  TvIcon,
+  PrinterIcon,
+  DeviceIcon,
+  SunIcon,
+  MoonIcon
 } from './Icons'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard')
   const [connected, setConnected] = useState(false)
   const [connectedPeers, setConnectedPeers] = useState<string[]>([])
-  const [peers, setPeers] = useState<string[]>([])
+  // mDNS peers are strings; free discovery peers are DiscoveredDevice
+  const [mDnsPeers, setMDnsPeers] = useState<string[]>([])
+  const [freePeers, setFreePeers] = useState<DiscoveredDevice[]>([])
+  const [isFreeSearch, setIsFreeSearch] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [audioInputs, setAudioInputs] = useState<AudioDevice[]>([])
   const [audioOutputs, setAudioOutputs] = useState<AudioDevice[]>([])
   const [statusMessage, setStatusMessage] = useState('Listo para conectar')
   const [isSearching, setIsSearching] = useState(false)
-  const [isFreeSearch, setIsFreeSearch] = useState(false)
   const [shareModalOpen, setShareModalOpen] = useState(false)
   const [shareTargetIp, setShareTargetIp] = useState('')
   const [connectingAddr, setConnectingAddr] = useState<string | null>(null)
+
+  // Detect current theme from DOM
+  const getCurrentTheme = () =>
+    document.documentElement.getAttribute('data-theme') as 'dark' | 'light' | null
+
+  const [isDark, setIsDark] = useState(() => {
+    const t = document.documentElement.getAttribute('data-theme')
+    return t !== 'light' // default dark
+  })
 
   useEffect(() => {
     loadConfig()
     checkConnection()
   }, [])
+
+  const toggleTheme = () => {
+    const next = isDark ? 'light' : 'dark'
+    setIsDark(!isDark)
+    document.documentElement.setAttribute('data-theme', next)
+    // Persist to config if available
+    if (config) {
+      const updated = { ...config, general: { ...config.general, theme: next } }
+      invoke('update_config', { config: updated }).catch(console.error)
+    }
+  }
 
   // Dynamic theme management
   useEffect(() => {
@@ -82,10 +114,11 @@ export default function App() {
       if (isFreeSearch) {
         // Ejecutar la llamada Tauri y el retraso artificial en paralelo para mostrar la animación
         const [found] = await Promise.all([
-          invoke<string[]>('start_free_discovery'),
+          invoke<DiscoveredDevice[]>('start_free_discovery'),
           delay(1800)
         ]);
-        setPeers(found)
+        setFreePeers(found)
+        setMDnsPeers([])
         setIsSearching(false)
         if (found.length > 0) {
           setStatusMessage(`Se encontraron ${found.length} dispositivo(s) en la red (ARP)`)
@@ -94,7 +127,8 @@ export default function App() {
         }
       } else {
         const found = await invoke<string[]>('start_discovery')
-        setPeers(found)
+        setMDnsPeers(found)
+        setFreePeers([])
         setIsSearching(false)
         if (found.length > 0) {
           setStatusMessage(`Se encontraron ${found.length} PC(s) en la red (mDNS)`)
@@ -168,7 +202,15 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <h1>PC Conector</h1>
+          <div className="app-brand">
+            <div className="app-logo-wrapper">
+              <img src={logoImg} alt="NetBridge Logo" className="app-logo" />
+            </div>
+            <div className="app-title-group">
+              <h1 className="app-title">NetBridge</h1>
+              <span className="app-tagline">Control Remoto LAN</span>
+            </div>
+          </div>
           <div className={`status-indicator ${connected ? 'connected' : 'disconnected'}`}>
             <span className="status-dot" />
             <span>{connected ? 'Conectado' : 'Desconectado'}</span>
@@ -231,11 +273,20 @@ export default function App() {
               {connected ? <CheckIcon size={16} color="var(--success)" /> : <InfoIcon size={16} color="var(--text-secondary)" />}
               {statusMessage}
             </span>
-            {connected && (
-              <button className="btn btn-danger btn-small" onClick={handleDisconnect}>
-                Desconectar
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {connected && (
+                <button className="btn btn-danger btn-small" onClick={handleDisconnect}>
+                  Desconectar
+                </button>
+              )}
+              <button
+                className="theme-toggle-btn"
+                onClick={toggleTheme}
+                title={isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+              >
+                {isDark ? <SunIcon size={18} /> : <MoonIcon size={18} />}
               </button>
-            )}
+            </div>
           </div>
         </header>
 
@@ -243,7 +294,8 @@ export default function App() {
           {activeTab === 'dashboard' && (
             <Dashboard
               connected={connected}
-              peers={peers}
+              mDnsPeers={mDnsPeers}
+              freePeers={freePeers}
               connectedPeers={connectedPeers}
               isSearching={isSearching}
               isFreeSearch={isFreeSearch}
@@ -296,10 +348,38 @@ export default function App() {
   )
 }
 
+// Helper to pick the right icon for a device type
+function DeviceTypeIcon({ deviceType, size = 22 }: { deviceType: string; size?: number }) {
+  switch (deviceType) {
+    case 'mobile': return <MobileIcon size={size} />
+    case 'laptop': return <LaptopIcon size={size} />
+    case 'router': return <RouterIcon size={size} />
+    case 'tv': return <TvIcon size={size} />
+    case 'printer': return <PrinterIcon size={size} />
+    case 'pc': return <ScreensIcon size={size} />
+    default: return <DeviceIcon size={size} />
+  }
+}
+
+// Helper: get a human-readable label for the device type
+function deviceTypeLabel(t: string): string {
+  const map: Record<string, string> = {
+    pc: 'PC de escritorio',
+    laptop: 'Laptop',
+    mobile: 'Smartphone',
+    router: 'Router / Switch',
+    tv: 'Smart TV',
+    printer: 'Impresora',
+    unknown: 'Dispositivo desconocido',
+  }
+  return map[t] ?? 'Dispositivo'
+}
+
 // ===== DASHBOARD =====
 function Dashboard({
   connected,
-  peers,
+  mDnsPeers,
+  freePeers,
   connectedPeers,
   isSearching,
   isFreeSearch,
@@ -311,7 +391,8 @@ function Dashboard({
   onShareApp
 }: {
   connected: boolean
-  peers: string[]
+  mDnsPeers: string[]
+  freePeers: DiscoveredDevice[]
   connectedPeers: string[]
   isSearching: boolean
   isFreeSearch: boolean
@@ -323,13 +404,17 @@ function Dashboard({
   onShareApp: (ip: string) => void
 }) {
   const [manualIp, setManualIp] = useState('')
+  const hasPeers = isFreeSearch ? freePeers.length > 0 : mDnsPeers.length > 0
 
-  const isManualConnecting = connectingAddr === manualIp;
+  const isManualConnecting = connectingAddr === manualIp
 
   return (
     <div className="panel">
       <h2>Panel Principal</h2>
       <p className="panel-subtitle">Conecta dispositivos en tu red local en segundos</p>
+
+      {/* Network stats + IP panel - always visible at top */}
+      <NetworkStatsPanel />
 
       <div className="dashboard-hero">
         <div className={`radar-container ${isSearching ? 'scanning' : ''}`}>
@@ -390,24 +475,25 @@ function Dashboard({
         </div>
       </div>
 
-      {peers.length === 0 && !connected && !isSearching && (
+      {!hasPeers && !connected && !isSearching && (
         <div className="empty-state">
           <div className="empty-icon">
             <InfoIcon size={28} />
           </div>
-          <p>No se encontraron PCs en la red local. Haz clic en el botón de arriba para comenzar a buscar o usa Conexión manual por IP.</p>
+          <p>No se encontraron dispositivos en la red local. Haz clic en el botón de arriba para comenzar a buscar o usa Conexión manual por IP.</p>
         </div>
       )}
 
-      {peers.length > 0 && !isSearching && (
+      {/* mDNS peers list */}
+      {!isFreeSearch && mDnsPeers.length > 0 && !isSearching && (
         <div className="peers-list">
-          <h3>{isFreeSearch ? 'Dispositivos locales (ARP)' : 'PCs con PC Conector (mDNS)'}</h3>
-          {peers.map((peer, i) => {
-            const parts = peer.split(' - ');
-            const name = parts[0] || peer;
-            const addr = parts[1] || peer;
-            const isPeerConnected = connectedPeers.includes(addr);
-            const isThisConnecting = connectingAddr === addr;
+          <h3>PCs con NetBridge (mDNS)</h3>
+          {mDnsPeers.map((peer, i) => {
+            const parts = peer.split(' - ')
+            const name = parts[0] || peer
+            const addr = parts[1] || peer
+            const isPeerConnected = connectedPeers.includes(addr)
+            const isThisConnecting = connectingAddr === addr
             return (
               <div key={i} className="peer-card">
                 <div className="peer-info">
@@ -415,56 +501,76 @@ function Dashboard({
                     <LaptopIcon size={22} />
                   </span>
                   <div className="peer-details">
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                      <span className="peer-name">{parts[1] ? name : 'Dispositivo Local'}</span>
-                      {isPeerConnected && (
-                        <span style={{
-                          fontSize: '11px',
-                          backgroundColor: 'rgba(46, 213, 115, 0.15)',
-                          color: '#2ed573',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                          marginLeft: '8px',
-                          fontWeight: 'bold'
-                        }}>
-                          Conectado
-                        </span>
-                      )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="peer-name">{parts[1] ? name : 'PC Local'}</span>
+                      <span className="peer-type-badge" data-type="pc">PC</span>
+                      {isPeerConnected && <span className="peer-connected-badge">Conectado</span>}
                     </div>
                     <span className="peer-address">{addr}</span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  {isFreeSearch && (
-                    <button
-                      className="btn btn-primary btn-small"
-                      onClick={() => onShareApp(addr)}
-                      style={{ background: 'rgba(139, 92, 246, 0.12)', color: 'var(--accent)', boxShadow: 'none' }}
-                      disabled={!!connectingAddr}
-                    >
-                      Compartir
-                    </button>
-                  )}
                   {isPeerConnected ? (
-                    <button
-                      className="btn btn-danger btn-small"
-                      onClick={() => onDisconnectFromPeer(addr)}
-                      disabled={!!connectingAddr}
-                    >
+                    <button className="btn btn-danger btn-small" onClick={() => onDisconnectFromPeer(addr)} disabled={!!connectingAddr}>
                       Desconectar
                     </button>
                   ) : (
-                    <button
-                      className="btn btn-primary btn-small"
-                      onClick={() => onConnect(peer)}
-                      disabled={!!connectingAddr}
-                    >
+                    <button className="btn btn-primary btn-small" onClick={() => onConnect(peer)} disabled={!!connectingAddr}>
                       {isThisConnecting ? 'Conectando...' : 'Conectar'}
                     </button>
                   )}
                 </div>
               </div>
-            );
+            )
+          })}
+        </div>
+      )}
+
+      {/* ARP free discovery device list */}
+      {isFreeSearch && freePeers.length > 0 && !isSearching && (
+        <div className="peers-list">
+          <h3>Dispositivos en la red local (ARP)</h3>
+          {freePeers.map((device, i) => {
+            const isPeerConnected = connectedPeers.includes(device.ip)
+            const isThisConnecting = connectingAddr === device.ip
+            const typeLabel = deviceTypeLabel(device.device_type)
+            return (
+              <div key={i} className="peer-card device-card">
+                <div className="peer-info">
+                  <span className={`peer-icon device-icon-${device.device_type} ${isPeerConnected ? 'connected' : ''}`}>
+                    <DeviceTypeIcon deviceType={device.device_type} size={22} />
+                  </span>
+                  <div className="peer-details">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span className="peer-name">{device.hostname}</span>
+                      <span className="peer-type-badge" data-type={device.device_type}>{typeLabel}</span>
+                      {isPeerConnected && <span className="peer-connected-badge">Conectado</span>}
+                    </div>
+                    <span className="peer-description">{device.description}</span>
+                    <span className="peer-address">{device.ip}</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                  <button
+                    className="btn btn-small share-btn"
+                    onClick={() => onShareApp(device.ip)}
+                    disabled={!!connectingAddr}
+                    title="Compartir NetBridge con este dispositivo"
+                  >
+                    Compartir
+                  </button>
+                  {isPeerConnected ? (
+                    <button className="btn btn-danger btn-small" onClick={() => onDisconnectFromPeer(device.ip)} disabled={!!connectingAddr}>
+                      Desconectar
+                    </button>
+                  ) : (
+                    <button className="btn btn-primary btn-small" onClick={() => onConnect(device.ip)} disabled={!!connectingAddr}>
+                      {isThisConnecting ? 'Conectando...' : 'Conectar'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
           })}
         </div>
       )}

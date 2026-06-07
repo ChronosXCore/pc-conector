@@ -38,3 +38,13 @@ export interface AppConfig {
 }
 
 export type Tab = 'dashboard' | 'screens' | 'services' | 'audio' | 'settings'
+
+export interface DiscoveredDevice {
+  ip: string
+  mac: string
+  hostname: string
+  device_type: 'pc' | 'laptop' | 'mobile' | 'router' | 'tv' | 'printer' | 'unknown'
+  brand: string
+  description: string
+}
+

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import QRCode from 'react-qr-code'
+import { QRCode } from 'react-qr-code'
 
 interface ShareModalProps {
   isOpen: boolean

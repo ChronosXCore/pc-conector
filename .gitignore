@@ -23,3 +23,7 @@ npm-prefix/
 *.sln
 *.sw?
 *.log
+
+# Compiled binaries and tests
+*.exe
+*.c
