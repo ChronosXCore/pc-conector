@@ -1,82 +1,68 @@
-# 🤖 PROMPT PARA EL AGENTE DE IA (Linux / Ubuntu / Arch)
+# 🤖 PROMPT PARA EL AGENTE DE IA — PC Linux (NetBridge v1.2)
 
-Copia todo el texto a continuación y pégalo en el chat de tu agente de IA en la otra computadora (la que tiene Linux). Este prompt está diseñado para guiarlo paso a paso en la descarga, instalación de dependencias, configuración de puertos de red y ejecución autónoma de la aplicación **NetBridge**.
-
----
-
-### INICIO DEL PROMPT PARA EL AGENTE:
-
-"Hola. Eres un agente de desarrollo de software en una PC Linux (basada en Ubuntu, Debian, Mint o Arch Linux). Tu objetivo es poner en marcha la aplicación de escritorio **NetBridge** (anteriormente *PC Conector*) en esta máquina de forma 100% autónoma.
-
-Esta aplicación está construida con **Tauri 2 (Rust) + React 19 (TypeScript) + CSS Puro**.
-
-Sigue estos pasos detallados para completar la tarea de forma autónoma:
+Copia TODO el texto a partir de aquí y pégalo en el chat de tu agente de IA en la otra computadora Linux:
 
 ---
 
-## 🛠️ PASO 1 — Instalar dependencias nativas de Tauri y GTK
+## TAREA
 
-Tauri necesita librerías de desarrollo nativas para compilar el backend de Rust y renderizar el frontend webview. Ejecuta el comando correspondiente según la distribución instalada:
+Eres el agente de configuración de **NetBridge**, una aplicación KVM de red LAN. Tu misión es configurar y ejecutar NetBridge en esta PC Linux para que se conecte automáticamente con el PC Windows de la misma red.
 
-### En Ubuntu / Debian / Linux Mint:
+Sigue TODOS los pasos en orden, sin saltarte ninguno.
+
+---
+
+## PASO 1 — Instalar dependencias del sistema
+
+Detecta si el sistema usa `apt`, `pacman`, `dnf` o `zypper` y ejecuta el comando correspondiente:
+
+**Ubuntu/Debian/Mint:**
 ```bash
-sudo apt update && sudo apt install -y \
-  build-essential curl libssl-dev libwebkit2gtk-4.1-dev \
-  libgtk-3-dev libappindicator3-dev librsvg2-dev patchelf nodejs npm git
+sudo apt update && sudo apt install -y curl git build-essential pkg-config libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libxtst-dev libx11-dev libxrandr-dev libxi-dev unzip nodejs npm
 ```
 
-### En Arch Linux / CachyOS / Manjaro:
+**Arch Linux/Manjaro:**
 ```bash
-sudo pacman -S --needed base-devel nodejs npm webkit2gtk-4.1 libappindicator-gtk3 librsvg openssl git
+sudo pacman -Syu --noconfirm curl git base-devel pkg-config openssl gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg xdotool libxtst libxrandr nodejs npm
+```
+
+**Fedora/RHEL:**
+```bash
+sudo dnf install -y curl git gcc pkg-config openssl-devel gtk3-devel webkit2gtk4.1-devel librsvg2-devel libxtst-devel libxrandr-devel nodejs npm
 ```
 
 ---
 
-## 🦀 PASO 2 — Instalar/Verificar Rust
-
-Verifica si Rust está instalado ejecutando `rustc --version` y `cargo --version`. Si no lo está o está desactualizado, instálalo ejecutando:
+## PASO 2 — Instalar Rust
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
+rustup update stable
 ```
+
+Verifica: `rustc --version` → debe mostrar 1.75 o superior.
 
 ---
 
-## 📂 PASO 3 — Obtener y actualizar el código fuente
-
-Asegúrate de clonar el repositorio en la última versión de la rama principal (`main`):
+## PASO 3 — Descargar NetBridge desde GitHub
 
 ```bash
-# 1. Clonar el repositorio
-git clone https://github.com/ChronosXCore/pc-conector.git
-cd pc-conector/pc-conector
+cd ~
+git clone https://github.com/ChronosXCore/pc-conector.git netbridge
+cd netbridge/pc-conector
+```
 
-# 2. Asegurar que estás en la última versión de la rama principal
-git checkout main
+Si el repositorio ya existe, actualízalo:
+```bash
+cd ~/netbridge
 git pull origin main
-```
-
-Asegúrate de estar posicionado en la subcarpeta `pc-conector` (donde se encuentra `package.json` y la subcarpeta `src-tauri`).
-
----
-
-## 🛡️ PASO 4 — Configurar puertos de red en el cortafuegos (UFW)
-
-Para permitir el descubrimiento por mDNS y la conexión cifrada directa (QUIC) entre ambas máquinas, abre los puertos necesarios ejecutando:
-
-```bash
-sudo ufw allow 9876/udp
-sudo ufw allow 5353/udp
-sudo ufw reload
-sudo ufw status
+cd pc-conector
 ```
 
 ---
 
-## 📦 PASO 5 — Instalar dependencias de Node.js
-
-Instala los módulos de Node necesarios para el frontend web:
+## PASO 4 — Instalar dependencias de Node.js
 
 ```bash
 npm install
@@ -84,26 +70,107 @@ npm install
 
 ---
 
-## 🚀 PASO 6 — Compilar y ejecutar la aplicación en desarrollo
+## PASO 5 — Configurar el Firewall
 
-Inicia el servidor de desarrollo de Vite y el shell de Tauri:
-
+**UFW (Ubuntu/Debian):**
 ```bash
-npm run tauri dev
+sudo ufw allow 9876/udp comment "NetBridge QUIC"
+sudo ufw allow 9875/udp comment "NetBridge Discovery"
+sudo ufw allow 5353/udp comment "NetBridge mDNS"
+sudo ufw reload
 ```
 
-Este comando:
-1. Iniciará el servidor de desarrollo local de Vite (React 19).
-2. Compilará el backend en Rust mediante Cargo (la primera compilación puede tardar entre 5 y 15 minutos).
-3. Lanzará la ventana de la aplicación de escritorio **NetBridge**.
+**firewalld (Fedora/Arch):**
+```bash
+sudo firewall-cmd --add-port=9876/udp --permanent
+sudo firewall-cmd --add-port=9875/udp --permanent
+sudo firewall-cmd --add-port=5353/udp --permanent
+sudo firewall-cmd --reload
+```
 
 ---
 
-## 🔍 PASO 7 — Verificación de funcionamiento
+## PASO 6 — Compilar y ejecutar NetBridge
 
-Una vez que la interfaz abra:
-1. Confirma que en la barra superior del Dashboard empiece la búsqueda automática local y veas la IP de este dispositivo.
-2. Abre la sección de **Pantallas** y confirma que se lean tus pantallas locales.
-3. Si el otro PC (Windows) ya tiene abierto NetBridge y están en la misma red local, confirma si se auto-conectan o si puedes conectarlos ingresando la IP manualmente.
+```bash
+cd ~/netbridge/pc-conector
+npm run tauri:dev
+```
 
-Infórmame de tu progreso en cada paso y reporta cuando la ventana esté activa."
+> ⚠️ La primera compilación tarda entre 5 y 15 minutos. Espera hasta ver `Running app` en la salida.
+
+---
+
+## PASO 7 — Verificar que funciona
+
+Una vez que la ventana de NetBridge se abra:
+
+1. En el **Panel Principal**, anota la IP que aparece en "Tu IP"
+2. Verifica en los logs: `Servidor QUIC iniciado en puerto 9876`
+3. Verifica: `Servicio de descubrimiento mDNS+UDP iniciado`
+
+---
+
+## PASO 8 — Conectar con el PC Windows
+
+**Opción A — Búsqueda mDNS (automática):**
+Panel Principal → clic en **"BUSCAR PCS EN LA RED"** (sin marcar "Búsqueda libre")
+
+**Opción B — Búsqueda libre ARP:**
+Marcar **"Búsqueda libre (Tabla ARP)"** → clic en **"BUSCAR PCS EN LA RED"**
+
+**Opción C — IP directa (más confiable):**
+Panel Principal → "Conexión manual por IP" → escribe la IP del PC Windows → **Conectar**
+
+---
+
+## PASO 9 — Configurar el paso del mouse entre PCs
+
+Una vez conectados:
+
+1. Ve a la pestaña **Pantallas**
+2. Verás pantallas locales (azul) y remotas (púrpura)
+3. **Arrastra** la pantalla del otro PC al lado donde físicamente está
+4. Clic en **"Aplicar disposición"**
+5. Ve a **Servicios** → activa **Compartir Mouse** y **Compartir Teclado**
+6. Mueve el cursor hasta el borde → pasa automáticamente al otro PC
+
+---
+
+## PASO 10 — Vincular para auto-conexión
+
+1. Panel Principal → en dispositivo encontrado → clic **"Vincular"**
+2. Ajustes → activar **"Conectar automáticamente"**
+
+A partir de ahora, al abrir NetBridge en ambas PCs se conectan solos en ~3 segundos.
+
+---
+
+## NOTAS IMPORTANTES
+
+- **Token de seguridad:** Por defecto `123456` (mismo en ambos PCs). Ajustes → Seguridad.
+- **Puertos:** UDP 9876 (QUIC), UDP 9875 (discovery), UDP 5353 (mDNS)
+- **Modal de aprobación:** al conectar aparece una ventana pidiendo aceptar. Marcar "Permitir siempre" para no volver a preguntar.
+- **Wayland:** Si hay problemas con captura de mouse: `GDK_BACKEND=x11 npm run tauri:dev`
+- **Grupo input:** Si no captura el mouse: `sudo usermod -aG input $USER` y reinicia sesión.
+
+---
+
+## TROUBLESHOOTING
+
+| Problema | Solución |
+|----------|----------|
+| `webkit2gtk not found` | `sudo apt install libwebkit2gtk-4.1-dev` |
+| No aparece ventana | Verificar `echo $DISPLAY` (debe mostrar `:0` o similar) |
+| No conecta con Windows | Usar Conexión manual por IP |
+| Error captura mouse | `sudo usermod -aG input $USER` + reiniciar sesión |
+| `cargo: command not found` | `source ~/.cargo/env` |
+| Compilación lenta/falla | `CARGO_BUILD_JOBS=2 npm run tauri:dev` |
+
+---
+
+Cuando termines, reporta:
+- ✅ IP de este PC Linux
+- ✅ Si la ventana de NetBridge se abrió
+- ✅ Si conectó con el PC Windows
+- ❌ Cualquier error encontrado
