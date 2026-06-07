@@ -463,6 +463,9 @@ fn parse_devices_from_arp_output(output: &str) -> Vec<(String, String)> {
 
 fn is_valid_mac_address(s: &str) -> bool {
     let clean = s.replace('-', ":").to_lowercase();
+    if clean == "00:00:00:00:00:00" || clean == "ff:ff:ff:ff:ff:ff" {
+        return false;
+    }
     let parts: Vec<&str> = clean.split(':').collect();
     if parts.len() != 6 {
         return false;
