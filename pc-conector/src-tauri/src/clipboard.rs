@@ -1,5 +1,5 @@
 use arboard::Clipboard;
-use log::{info, warn, error};
+use log::info;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;

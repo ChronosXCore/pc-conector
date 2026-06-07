@@ -2,7 +2,7 @@ use crate::network::{KeyboardData, KeyboardEventType, MouseData, MouseEventType}
 use enigo::{
     Coordinate, Direction, Enigo, Key, Keyboard as EnigoKeyboard, Mouse as EnigoMouse, Settings,
 };
-use log::{info, warn, error};
+use log::{info, error};
 use rdev::{listen, Event, EventType};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -25,6 +25,7 @@ pub struct InputService {
     enigo: Arc<Mutex<Enigo>>,
     is_capturing: Arc<Mutex<bool>>,
     on_input: Option<InputCallback>,
+    #[allow(dead_code)]
     mouse_locked: Arc<Mutex<bool>>,
 }
 
@@ -91,7 +92,6 @@ impl InputService {
                                 char: Some(map_rdev_key_to_string(key)),
                             })
                         }
-                        _ => None,
                     };
 
                     if let Some(event) = input_event {
@@ -214,6 +214,13 @@ fn map_rdev_key_to_string(key: rdev::Key) -> String {
         rdev::Key::DownArrow => "[DownArrow]".to_string(),
         rdev::Key::LeftArrow => "[LeftArrow]".to_string(),
         rdev::Key::RightArrow => "[RightArrow]".to_string(),
+        rdev::Key::CapsLock => "[CapsLock]".to_string(),
+        rdev::Key::Delete => "[Delete]".to_string(),
+        rdev::Key::End => "[End]".to_string(),
+        rdev::Key::Home => "[Home]".to_string(),
+        rdev::Key::PageDown => "[PageDown]".to_string(),
+        rdev::Key::PageUp => "[PageUp]".to_string(),
+        rdev::Key::Insert => "[Insert]".to_string(),
         rdev::Key::F1 => "[F1]".to_string(),
         rdev::Key::F2 => "[F2]".to_string(),
         rdev::Key::F3 => "[F3]".to_string(),
@@ -262,6 +269,29 @@ fn map_rdev_key_to_string(key: rdev::Key) -> String {
         rdev::Key::Num7 => "7".to_string(),
         rdev::Key::Num8 => "8".to_string(),
         rdev::Key::Num9 => "9".to_string(),
+        // Symbols mapping
+        rdev::Key::Minus => "-".to_string(),
+        rdev::Key::Equal => "=".to_string(),
+        rdev::Key::LeftBracket => "[".to_string(),
+        rdev::Key::RightBracket => "]".to_string(),
+        rdev::Key::BackSlash => "\\".to_string(),
+        rdev::Key::SemiColon => ";".to_string(),
+        rdev::Key::Quote => "'".to_string(),
+        rdev::Key::Comma => ",".to_string(),
+        rdev::Key::Dot => ".".to_string(),
+        rdev::Key::Slash => "/".to_string(),
+        rdev::Key::BackQuote => "`".to_string(),
+        // Numpad mapping
+        rdev::Key::Kp0 => "0".to_string(),
+        rdev::Key::Kp1 => "1".to_string(),
+        rdev::Key::Kp2 => "2".to_string(),
+        rdev::Key::Kp3 => "3".to_string(),
+        rdev::Key::Kp4 => "4".to_string(),
+        rdev::Key::Kp5 => "5".to_string(),
+        rdev::Key::Kp6 => "6".to_string(),
+        rdev::Key::Kp7 => "7".to_string(),
+        rdev::Key::Kp8 => "8".to_string(),
+        rdev::Key::Kp9 => "9".to_string(),
         _ => "".to_string(),
     }
 }
@@ -280,6 +310,13 @@ fn parse_special_key(s: &str) -> Option<Key> {
         "[DownArrow]" => Some(Key::DownArrow),
         "[LeftArrow]" => Some(Key::LeftArrow),
         "[RightArrow]" => Some(Key::RightArrow),
+        "[CapsLock]" => Some(Key::CapsLock),
+        "[Delete]" => Some(Key::Delete),
+        "[End]" => Some(Key::End),
+        "[Home]" => Some(Key::Home),
+        "[PageDown]" => Some(Key::PageDown),
+        "[PageUp]" => Some(Key::PageUp),
+        "[Insert]" => Some(Key::Insert),
         "[F1]" => Some(Key::F1),
         "[F2]" => Some(Key::F2),
         "[F3]" => Some(Key::F3),

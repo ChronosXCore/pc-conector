@@ -21,6 +21,7 @@ import {
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard')
   const [connected, setConnected] = useState(false)
+  const [connectedPeers, setConnectedPeers] = useState<string[]>([])
   const [peers, setPeers] = useState<string[]>([])
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [audioInputs, setAudioInputs] = useState<AudioDevice[]>([])
@@ -59,6 +60,8 @@ export default function App() {
     try {
       const status = await invoke<boolean>('get_connection_status')
       setConnected(status)
+      const activePeers = await invoke<string[]>('get_connected_peers')
+      setConnectedPeers(activePeers)
     } catch (e) {
       console.error(e)
     }
@@ -86,18 +89,29 @@ export default function App() {
     try {
       setStatusMessage(`Conectando a ${addr}...`)
       await invoke('connect_to_peer', { addr: addr.split(' - ')[1] || addr })
-      setConnected(true)
+      await checkConnection()
       setStatusMessage(`Conectado a ${addr}`)
     } catch (e) {
       setStatusMessage(`Error al conectar: ${e}`)
     }
   }
 
+  const handleDisconnectFromPeer = async (addr: string) => {
+    try {
+      setStatusMessage(`Desconectando de ${addr}...`)
+      await invoke('disconnect_from_peer', { addr })
+      await checkConnection()
+      setStatusMessage(`Desconectado de ${addr}`)
+    } catch (e) {
+      setStatusMessage(`Error al desconectar de ${addr}: ${e}`)
+    }
+  }
+
   const handleDisconnect = async () => {
     try {
       await invoke('disconnect')
-      setConnected(false)
-      setStatusMessage('Desconectado')
+      await checkConnection()
+      setStatusMessage('Desconectado de todos los dispositivos')
     } catch (e) {
       setStatusMessage(`Error: ${e}`)
     }
@@ -203,9 +217,11 @@ export default function App() {
             <Dashboard
               connected={connected}
               peers={peers}
+              connectedPeers={connectedPeers}
               isSearching={isSearching}
               onDiscover={handleDiscover}
               onConnect={handleConnect}
+              onDisconnectFromPeer={handleDisconnectFromPeer}
             />
           )}
           {activeTab === 'screens' && config && (
@@ -244,15 +260,19 @@ export default function App() {
 function Dashboard({
   connected,
   peers,
+  connectedPeers,
   isSearching,
   onDiscover,
-  onConnect
+  onConnect,
+  onDisconnectFromPeer
 }: {
   connected: boolean
   peers: string[]
+  connectedPeers: string[]
   isSearching: boolean
   onDiscover: () => void
   onConnect: (addr: string) => void
+  onDisconnectFromPeer: (addr: string) => void
 }) {
   return (
     <div className="panel">
@@ -274,7 +294,7 @@ function Dashboard({
         <button
           className="btn btn-primary btn-large"
           onClick={onDiscover}
-          disabled={connected || isSearching}
+          disabled={isSearching}
         >
           <SearchIcon size={20} />
           {isSearching ? 'BUSCANDO...' : 'BUSCAR PCS EN LA RED'}
@@ -293,26 +313,53 @@ function Dashboard({
       {peers.length > 0 && !isSearching && (
         <div className="peers-list">
           <h3>PCs Encontrados</h3>
-          {peers.map((peer, i) => (
-            <div key={i} className="peer-card">
-              <div className="peer-info">
-                <span className="peer-icon">
-                  <LaptopIcon size={22} />
-                </span>
-                <div className="peer-details">
-                  <span className="peer-name">{peer.split(' - ')[0] || peer}</span>
-                  <span className="peer-address">{peer.split(' - ')[1] || 'Local'}</span>
+          {peers.map((peer, i) => {
+            const addr = peer.split(' - ')[1] || peer;
+            const isPeerConnected = connectedPeers.includes(addr);
+            return (
+              <div key={i} className="peer-card">
+                <div className="peer-info">
+                  <span className={`peer-icon ${isPeerConnected ? 'connected' : ''}`}>
+                    <LaptopIcon size={22} />
+                  </span>
+                  <div className="peer-details">
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <span className="peer-name">{peer.split(' - ')[0] || peer}</span>
+                      {isPeerConnected && (
+                        <span style={{
+                          fontSize: '11px',
+                          backgroundColor: 'rgba(46, 213, 115, 0.15)',
+                          color: '#2ed573',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          marginLeft: '8px',
+                          fontWeight: 'bold'
+                        }}>
+                          Conectado
+                        </span>
+                      )}
+                    </div>
+                    <span className="peer-address">{addr}</span>
+                  </div>
                 </div>
+                {isPeerConnected ? (
+                  <button
+                    className="btn btn-danger btn-small"
+                    onClick={() => onDisconnectFromPeer(addr)}
+                  >
+                    Desconectar
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-primary btn-small"
+                    onClick={() => onConnect(peer)}
+                  >
+                    Conectar
+                  </button>
+                )}
               </div>
-              <button
-                className="btn btn-primary btn-small"
-                onClick={() => onConnect(peer)}
-                disabled={connected}
-              >
-                Conectar
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

@@ -56,6 +56,7 @@ pub struct ConnectionConfig {
     pub auto_reconnect: bool,
     pub reconnect_interval: u64,
     pub encryption_enabled: bool,
+    pub security_token: String,
 }
 
 impl Default for AppConfig {
@@ -88,6 +89,7 @@ impl Default for AppConfig {
                 auto_reconnect: true,
                 reconnect_interval: 5,
                 encryption_enabled: true,
+                security_token: "123456".to_string(),
             },
         }
     }

@@ -1,10 +1,7 @@
-use crate::network::AudioStreamConfig;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, FromSample, Sample, Stream, StreamConfig};
+use cpal::{Device, Stream};
 use log::{info, warn, error};
 use std::sync::{Arc, Mutex};
-use std::thread;
-
 use serde::{Serialize, Deserialize};
 
 /// Información de un dispositivo de audio
@@ -24,15 +21,21 @@ pub enum AudioDeviceType {
     Both,
 }
 
-/// Servicio de streaming de audio bidireccional
+/// Servicio de streaming de audio bidireccional con codificación Opus
 pub struct AudioService {
     host: cpal::Host,
     is_streaming: Arc<Mutex<bool>>,
     input_stream: Option<Stream>,
     output_stream: Option<Stream>,
+    #[allow(dead_code)]
     input_device: Option<String>,
+    #[allow(dead_code)]
     output_device: Option<String>,
-    on_audio_data: Option<Box<dyn Fn(Vec<f32>) + Send + 'static>>,
+    on_encoded_data: Arc<Mutex<Option<Box<dyn Fn(Vec<u8>) + Send + 'static>>>>,
+    playback_buffer: Arc<Mutex<Vec<f32>>>,
+    decoder: Arc<Mutex<Option<opus::Decoder>>>,
+    output_channels: Arc<Mutex<u16>>,
+    #[allow(dead_code)]
     sample_rate: u32,
 }
 
@@ -50,7 +53,10 @@ impl AudioService {
             output_stream: None,
             input_device: None,
             output_device: None,
-            on_audio_data: None,
+            on_encoded_data: Arc::new(Mutex::new(None)),
+            playback_buffer: Arc::new(Mutex::new(Vec::new())),
+            decoder: Arc::new(Mutex::new(None)),
+            output_channels: Arc::new(Mutex::new(1)),
             sample_rate: 48000,
         }
     }
@@ -94,15 +100,15 @@ impl AudioService {
         Ok((inputs, outputs))
     }
 
-    /// Establecer callback para datos de audio recibidos
-    pub fn set_on_audio_data<F>(&mut self, callback: F)
+    /// Establecer callback para datos de audio codificados listos para enviar
+    pub fn set_on_encoded_data<F>(&mut self, callback: F)
     where
-        F: Fn(Vec<f32>) + Send + 'static,
+        F: Fn(Vec<u8>) + Send + 'static,
     {
-        self.on_audio_data = Some(Box::new(callback));
+        *self.on_encoded_data.lock().unwrap() = Some(Box::new(callback));
     }
 
-    /// Iniciar captura de audio desde el micrófono
+    /// Iniciar captura de audio desde el micrófono y codificarlo con Opus
     pub fn start_capture(&mut self, device_name: Option<&str>) -> Result<(), String> {
         let device = self.select_device(device_name, true)?;
         let config = device.default_input_config()
@@ -114,13 +120,36 @@ impl AudioService {
 
         *is_streaming.lock().unwrap() = true;
 
+        // Crear codificador Opus (48000Hz, Mono para streaming eficiente)
+        let mut encoder = opus::Encoder::new(48000, opus::Channels::Mono, opus::Application::Audio)
+            .map_err(|e| format!("Error al crear codificador Opus: {:?}", e))?;
+
+        let capture_buffer = Arc::new(Mutex::new(Vec::new()));
+        let on_encoded = self.on_encoded_data.clone();
+
         let stream = device.build_input_stream(
             &config.into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 if *is_streaming.lock().unwrap() {
-                    // Aquí se enviarían los datos de audio al peer
-                    // Por ahora solo lo registramos
-                    info!("Audio capturado: {} samples", data.len());
+                    let mut buffer = capture_buffer.lock().unwrap();
+                    buffer.extend_from_slice(data);
+
+                    // Un frame de 20ms a 48000Hz Mono contiene exactamente 960 samples
+                    while buffer.len() >= 960 {
+                        let frame: Vec<f32> = buffer.drain(0..960).collect();
+                        let mut output = vec![0u8; 1000];
+                        match encoder.encode_float(&frame, &mut output) {
+                            Ok(len) => {
+                                output.truncate(len);
+                                if let Some(ref cb) = *on_encoded.lock().unwrap() {
+                                    cb(output);
+                                }
+                            }
+                            Err(e) => {
+                                error!("Error al codificar audio Opus: {:?}", e);
+                            }
+                        }
+                    }
                 }
             },
             |err| {
@@ -131,25 +160,37 @@ impl AudioService {
 
         stream.play().map_err(|e| format!("Error al iniciar stream: {}", e))?;
         self.input_stream = Some(stream);
-        info!("Captura de audio iniciada ({} Hz, {} canales)", sample_rate, channels);
+        info!("Captura de audio iniciada ({} Hz, {} canales, codificación Opus Mono)", sample_rate, channels);
         Ok(())
     }
 
-    /// Iniciar reproducción de audio (para recibir audio del peer)
+    /// Iniciar reproducción de audio (para reproducir audio del peer)
     pub fn start_playback(&mut self, device_name: Option<&str>) -> Result<(), String> {
         let device = self.select_device(device_name, false)?;
         let config = device.default_output_config()
             .map_err(|e| format!("Error al obtener configuración de salida: {}", e))?;
 
-        let channels = config.channels() as usize;
+        let channels = config.channels();
+        *self.output_channels.lock().unwrap() = channels;
+
+        let opus_decoder = opus::Decoder::new(48000, opus::Channels::Mono)
+            .map_err(|e| format!("Error al crear decodificador Opus: {:?}", e))?;
+        *self.decoder.lock().unwrap() = Some(opus_decoder);
+
+        let playback_buffer = self.playback_buffer.clone();
 
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                // Aquí se recibirían datos del peer para reproducir
-                // Por ahora silencio
-                for sample in data.iter_mut() {
-                    *sample = 0.0;
+                let mut buffer = playback_buffer.lock().unwrap();
+                let to_read = data.len().min(buffer.len());
+                for i in 0..to_read {
+                    data[i] = buffer[i];
+                }
+                buffer.drain(0..to_read);
+                // Rellenar con silencio si no hay suficientes datos
+                for i in to_read..data.len() {
+                    data[i] = 0.0;
                 }
             },
             |err| {
@@ -162,6 +203,34 @@ impl AudioService {
         self.output_stream = Some(stream);
         info!("Reproducción de audio iniciada ({} canales)", channels);
         Ok(())
+    }
+
+    /// Recibe un paquete codificado de Opus, lo decodifica y lo añade al buffer de reproducción
+    pub fn play_raw_data(&self, data: Vec<u8>) -> Result<(), String> {
+        let mut decoder_guard = self.decoder.lock().unwrap();
+        if let Some(ref mut decoder) = *decoder_guard {
+            let mut decoded = vec![0.0f32; 960]; // 20ms a 48000Hz Mono
+            match decoder.decode_float(&data, &mut decoded, false) {
+                Ok(len) => {
+                    let mut buffer = self.playback_buffer.lock().unwrap();
+                    let channels = *self.output_channels.lock().unwrap();
+                    
+                    // Si el dispositivo espera estéreo (2 canales), duplicamos las muestras mono
+                    if channels == 2 {
+                        for &sample in &decoded[0..len] {
+                            buffer.push(sample); // Izquierdo
+                            buffer.push(sample); // Derecho
+                        }
+                    } else {
+                        buffer.extend_from_slice(&decoded[0..len]);
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(format!("Error al decodificar audio: {:?}", e)),
+            }
+        } else {
+            Err("Decodificador de audio no inicializado".to_string())
+        }
     }
 
     /// Seleccionar un dispositivo por nombre
@@ -189,6 +258,8 @@ impl AudioService {
         *self.is_streaming.lock().unwrap() = false;
         self.input_stream = None;
         self.output_stream = None;
+        *self.decoder.lock().unwrap() = None;
+        self.playback_buffer.lock().unwrap().clear();
         info!("Audio detenido");
     }
 }

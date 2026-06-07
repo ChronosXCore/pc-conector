@@ -1,14 +1,15 @@
+use log::info;
+
 use crate::config::PeerInfo;
-use log::{info, warn, error};
 use mdns_sd::{ServiceDaemon, ServiceInfo, ServiceEvent};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// Servicio de descubrimiento de peers en la red local usando mDNS
 pub struct DiscoveryService {
     mdns: Option<ServiceDaemon>,
     peers: Arc<Mutex<HashMap<String, PeerInfo>>>,
+    #[allow(dead_code)]
     service_name: &'static str,
     service_type: &'static str,
 }
@@ -32,7 +33,7 @@ impl DiscoveryService {
         let service_info = ServiceInfo::new(
             self.service_type,
             hostname,
-            &format!("{}.{}", hostname, self.service_type),
+            &format!("{}.local.", hostname),
             "", // IP se detecta automáticamente
             port,
             None, // sin propiedades adicionales
@@ -76,7 +77,7 @@ impl DiscoveryService {
                         let mut peers = peers.lock().unwrap();
                         peers.insert(peer.id.clone(), peer);
                     }
-                    ServiceEvent::ServiceRemoved(service_type, fullname) => {
+                    ServiceEvent::ServiceRemoved(_service_type, fullname) => {
                         info!("Peer eliminado: {}", fullname);
                         let mut peers = peers.lock().unwrap();
                         peers.remove(&fullname);
