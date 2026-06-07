@@ -185,6 +185,25 @@ export default function SettingsPanel({
             <option value={60}>60 segundos</option>
           </select>
         </div>
+
+        <div className="select-group" style={{ marginTop: '20px' }}>
+          <label>Token de Seguridad (debe ser idéntico en ambos PCs)</label>
+          <input
+            type="text"
+            className="manual-input"
+            value={config.connection.security_token}
+            onChange={(e) =>
+              onUpdate({
+                ...config,
+                connection: {
+                  ...config.connection,
+                  security_token: e.target.value
+                }
+              })
+            }
+            placeholder="Ej: 123456"
+          />
+        </div>
       </div>
     </div>
   )
