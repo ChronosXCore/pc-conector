@@ -113,9 +113,12 @@ impl NetworkManager {
 
         endpoint.set_default_client_config(client_config);
 
-        let server_addr: SocketAddr = format!("{}:{}", addr, port)
-            .parse()
-            .map_err(|e| format!("Dirección del servidor inválida: {}", e))?;
+        let server_addr: SocketAddr = if addr.contains(':') {
+            addr.parse()
+        } else {
+            format!("{}:{}", addr, port).parse()
+        }
+        .map_err(|e| format!("Dirección del servidor inválida '{}': {}", addr, e))?;
 
         let connect_future = endpoint
             .connect(server_addr, "localhost")
