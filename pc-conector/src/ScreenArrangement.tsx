@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { ScreensIcon, InfoIcon, LaptopIcon, CheckIcon } from './Icons'
 import type { ScreenInfo } from './types'
 
@@ -61,7 +62,15 @@ export default function ScreenArrangement() {
   useEffect(() => {
     refresh()
     const interval = setInterval(refresh, 6000)
-    return () => clearInterval(interval)
+    // Also refresh when backend reports a peer-triggered layout change
+    let unlisten: (() => void) | undefined
+    listen('virtual-layout-changed', () => {
+      refresh()
+    }).then(fn => { unlisten = fn })
+    return () => {
+      clearInterval(interval)
+      unlisten?.()
+    }
   }, [refresh])
 
   // Build combined list from local + remote, applying user positions

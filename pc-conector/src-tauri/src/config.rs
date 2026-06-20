@@ -2,6 +2,17 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// A saved virtual screen with position in the shared canvas
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedVirtualScreen {
+    pub id: String,
+    pub owner: String,   // "local" or peer IP
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Configuración completa de la aplicación
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -12,6 +23,9 @@ pub struct AppConfig {
     pub connection: ConnectionConfig,
     #[serde(default)]
     pub linked_devices: Vec<LinkedDevice>,
+    /// User-arranged virtual layout (persisted so it survives reconnects)
+    #[serde(default)]
+    pub saved_layout: Vec<SavedVirtualScreen>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +137,7 @@ impl Default for AppConfig {
                 allowed_devices: Vec::new(),
             },
             linked_devices: Vec::new(),
+            saved_layout: Vec::new(),
         }
     }
 }

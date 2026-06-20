@@ -34,6 +34,17 @@ pub enum NetworkMessage {
     StopAudioCapture,
     StopAudioPlayback,
     AudioDevices { inputs: Vec<AudioDeviceInfo>, outputs: Vec<AudioDeviceInfo> },
+    /// Sent after the user saves a custom screen arrangement.
+    /// Contains the sender's view of the layout so the receiver can mirror it.
+    VirtualLayoutUpdate {
+        /// The position of the RECEIVER's screens as seen from the SENDER.
+        /// e.g. if sender puts receiver to the left, receiver_x will be negative.
+        receiver_relative_x: i32,
+        receiver_relative_y: i32,
+    },
+    /// Sent by the receiver when its cursor hits the edge facing the sender,
+    /// signalling that control should return to the sender.
+    CursorReturn,
     Ping,
     Pong,
 }

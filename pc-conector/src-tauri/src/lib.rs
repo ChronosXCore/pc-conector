@@ -57,6 +57,8 @@ pub struct AppState {
     pub forwarding_to: Arc<Mutex<Option<String>>>,
     /// Last known raw mouse position (absolute pixel coords on local desktop)
     pub last_mouse_pos: Arc<Mutex<(f64, f64)>>,
+    /// Instant until which mouse events are ignored after a warp (prevents snap loop)
+    pub warp_cooldown_until: Arc<Mutex<std::time::Instant>>,
 }
 
 impl AppState {
@@ -77,6 +79,7 @@ impl AppState {
             virtual_layout: Arc::new(Mutex::new(Vec::new())),
             forwarding_to: Arc::new(Mutex::new(None)),
             last_mouse_pos: Arc::new(Mutex::new((0.0, 0.0))),
+            warp_cooldown_until: Arc::new(Mutex::new(std::time::Instant::now())),
         }
     }
 }
@@ -153,26 +156,118 @@ fn send_to_peer(peer_addr: &str, msg: NetworkMessage, state: &AppState) {
 
 // ───────────────────────────────────────────────────────────────────────────
 // KVM EDGE DETECTION
-// Given the current mouse position and the virtual layout, detect if the
-// cursor has crossed into a remote screen. Returns the peer IP and the
-// normalised (0..1) position within the remote screen if so.
+// Detect when the cursor hits the physical edge of a local screen AND there
+// is a remote screen adjacent in that direction in the virtual layout.
+// Returns (peer_ip, normalized_x 0..1, normalized_y 0..1) within the remote.
+//
+// EDGE_PX: how many pixels from the physical screen edge triggers crossover.
 // ───────────────────────────────────────────────────────────────────────────
-fn find_remote_screen_at(x: f64, y: f64, layout: &[VirtualScreen]) -> Option<(String, f64, f64)> {
-    for vs in layout {
-        if vs.owner == "local" {
-            continue;
+const EDGE_PX: f64 = 2.0;
+
+/// Direction of crossover
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CrossDir { Right, Left, Down, Up }
+
+/// Find if the cursor (x, y) is at the edge of a local screen AND a remote screen
+/// is adjacent in that direction in the virtual layout.
+fn find_remote_at_edge(x: f64, y: f64, layout: &[VirtualScreen]) -> Option<(String, f64, f64)> {
+    // Find which local screen the cursor is on (or nearest to)
+    let local_screens: Vec<&VirtualScreen> = layout.iter().filter(|v| v.owner == "local").collect();
+    if local_screens.is_empty() { return None; }
+
+    for local in &local_screens {
+        let lx = local.x as f64;
+        let ly = local.y as f64;
+        let lw = local.width as f64;
+        let lh = local.height as f64;
+
+        // Must be within this local screen's bounds
+        if x < lx || x >= lx + lw || y < ly || y >= ly + lh { continue; }
+
+        // Check all 4 edges
+        let edges = [
+            (x >= lx + lw - EDGE_PX, CrossDir::Right,  lx + lw, ly, lh, true),
+            (x <  lx + EDGE_PX,      CrossDir::Left,   lx,       ly, lh, false),
+            (y >= ly + lh - EDGE_PX, CrossDir::Down,   ly + lh,  lx, lw, true),
+            (y <  ly + EDGE_PX,      CrossDir::Up,     ly,       lx, lw, false),
+        ];
+
+        for (at_edge, dir, _edge_coord, perp_start, perp_size, _positive) in &edges {
+            if !at_edge { continue; }
+            // Find a remote screen adjacent in that direction
+            if let Some(rem) = find_adjacent_remote(layout, local, *dir) {
+                // Normalised position: axis perpendicular to crossover direction
+                let (nx, ny) = match dir {
+                    CrossDir::Right | CrossDir::Left => {
+                        let perp = (y - *perp_start).clamp(0.0, *perp_size - 1.0) / *perp_size;
+                        // Enter remote screen: x at its opposite edge
+                        let enter_x = if *dir == CrossDir::Right { 0.0 } else { 1.0 };
+                        (enter_x, perp)
+                    }
+                    CrossDir::Down | CrossDir::Up => {
+                        let perp = (x - *perp_start).clamp(0.0, *perp_size - 1.0) / *perp_size;
+                        let enter_y = if *dir == CrossDir::Down { 0.0 } else { 1.0 };
+                        (perp, enter_y)
+                    }
+                };
+                return Some((rem.owner.clone(), nx, ny));
+            }
         }
+    }
+    None
+}
+
+/// Find a remote VirtualScreen that is adjacent to `local` in the given direction.
+fn find_adjacent_remote<'a>(layout: &'a [VirtualScreen], local: &VirtualScreen, dir: CrossDir) -> Option<&'a VirtualScreen> {
+    // Adjacency: the remote screen's near edge overlaps or touches the local's far edge,
+    // and they share some vertical/horizontal band.
+    let lx = local.x as f64;
+    let ly = local.y as f64;
+    let lw = local.width as f64;
+    let lh = local.height as f64;
+    let tolerance = 300.0; // px tolerance for "aligned" edges
+
+    let mut best: Option<&VirtualScreen> = None;
+    let mut best_dist = f64::MAX;
+
+    for vs in layout {
+        if vs.owner == "local" { continue; }
         let rx = vs.x as f64;
         let ry = vs.y as f64;
         let rw = vs.width as f64;
         let rh = vs.height as f64;
-        if x >= rx && x < rx + rw && y >= ry && y < ry + rh {
-            let nx = (x - rx) / rw;
-            let ny = (y - ry) / rh;
-            return Some((vs.owner.clone(), nx, ny));
+
+        let (adjacent, dist) = match dir {
+            CrossDir::Right => {
+                // Remote left edge near local right edge
+                let d = (rx - (lx + lw)).abs();
+                // Vertical overlap
+                let overlap = (ly + lh).min(ry + rh) - ly.max(ry);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+            CrossDir::Left => {
+                let d = ((rx + rw) - lx).abs();
+                let overlap = (ly + lh).min(ry + rh) - ly.max(ry);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+            CrossDir::Down => {
+                let d = (ry - (ly + lh)).abs();
+                let overlap = (lx + lw).min(rx + rw) - lx.max(rx);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+            CrossDir::Up => {
+                let d = ((ry + rh) - ly).abs();
+                let overlap = (lx + lw).min(rx + rw) - lx.max(rx);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+        };
+
+        if adjacent && dist < best_dist {
+            best_dist = dist;
+            best = Some(vs);
         }
     }
-    None
+    best
 }
 
 /// Returns the primary local screen from the virtual layout, or None
@@ -184,6 +279,14 @@ fn primary_local_screen(layout: &[VirtualScreen]) -> Option<&VirtualScreen> {
 /// Called on every mouse-move event from rdev. Checks edge-crossing and
 /// decides whether to forward to remote or keep local.
 fn handle_mouse_move(x: f64, y: f64, state: &AppState) {
+    // Skip events arriving during warp cooldown to prevent snap-back loop
+    {
+        let cooldown = *state.warp_cooldown_until.lock().unwrap();
+        if std::time::Instant::now() < cooldown {
+            return;
+        }
+    }
+
     *state.last_mouse_pos.lock().unwrap() = (x, y);
 
     let layout = state.virtual_layout.lock().unwrap().clone();
@@ -193,35 +296,42 @@ fn handle_mouse_move(x: f64, y: f64, state: &AppState) {
 
     let currently_forwarding = state.forwarding_to.lock().unwrap().clone();
 
-    if let Some(peer_ip) = currently_forwarding {
-        // We are already forwarding — find the remote screen for this peer and
-        // check if the cursor has re-entered a LOCAL screen.
-        let remote_vs: Vec<&VirtualScreen> = layout.iter().filter(|v| v.owner == peer_ip).collect();
-        
-        // Check if we're back in a local area
-        let in_local = layout.iter().any(|v| {
-            if v.owner != "local" { return false; }
-            let rx = v.x as f64; let ry = v.y as f64;
-            let rw = v.width as f64; let rh = v.height as f64;
-            x >= rx && x < rx + rw && y >= ry && y < ry + rh
-        });
+    if let Some(ref peer_ip) = currently_forwarding {
+        // We are forwarding — send cursor movement to remote.
+        // The cursor is kept at center of the local screen via snap,
+        // so any movement from center represents user intent.
+        let local_screens: Vec<&VirtualScreen> = layout.iter().filter(|v| v.owner == "local").collect();
+        let primary = local_screens.iter()
+            .find(|v| v.is_primary)
+            .or_else(|| local_screens.first())
+            .copied();
 
-        if in_local && !remote_vs.is_empty() {
-            // Return control to local
-            *state.forwarding_to.lock().unwrap() = None;
-            *state.cursor_on_remote.lock().unwrap() = false;
-            info!("Cursor devuelto al equipo local desde {}", peer_ip);
-            if let Some(ref handle) = *state.app_handle.lock().unwrap() {
-                let _ = handle.emit("cursor-returned-local", ());
-            }
-        } else {
-            // Still in remote territory — compute normalised position within the remote screen
-            if let Some(rem) = remote_vs.first() {
-                let rx = rem.x as f64; let ry = rem.y as f64;
-                let rw = rem.width as f64; let rh = rem.height as f64;
-                let nx = ((x - rx) / rw).clamp(0.0, 1.0);
-                let ny = ((y - ry) / rh).clamp(0.0, 1.0);
-                // Send normalised move to remote peer
+        if let Some(local) = primary {
+            let lw = local.width as f64;
+            let lh = local.height as f64;
+            let lx = local.x as f64;
+            let ly = local.y as f64;
+            let center_x = lx + lw / 2.0;
+            let center_y = ly + lh / 2.0;
+
+            // Delta from center — this is what the user actually moved
+            let dx = x - center_x;
+            let dy = y - center_y;
+
+            // If the user moved the cursor significantly away from center,
+            // they want to move on the remote screen
+            if dx.abs() > 1.0 || dy.abs() > 1.0 {
+                // Re-snap cursor to center with cooldown
+                *state.warp_cooldown_until.lock().unwrap() =
+                    std::time::Instant::now() + std::time::Duration::from_millis(80);
+                if let Some(ref svc) = *state.input_service.lock().unwrap() {
+                    let _ = svc.warp_mouse(center_x as i32, center_y as i32);
+                }
+
+                // Send delta as normalised position within the remote screen
+                // We accumulate deltas: normalize by screen size to get 0..1 movement
+                let nx = (0.5 + dx / lw).clamp(0.0, 1.0);
+                let ny = (0.5 + dy / lh).clamp(0.0, 1.0);
                 let msg = NetworkMessage::MouseEvent(network::MouseData {
                     event_type: network::MouseEventType::Move,
                     x: nx,
@@ -229,35 +339,40 @@ fn handle_mouse_move(x: f64, y: f64, state: &AppState) {
                     button: None,
                     scroll_delta: None,
                 });
-                send_to_peer(&peer_ip, msg, state);
+                send_to_peer(peer_ip, msg, state);
             }
         }
         return;
     }
 
-    // Not forwarding — check if cursor has moved into a remote screen zone
-    if let Some((peer_ip, nx, ny)) = find_remote_screen_at(x, y, &layout) {
+    // Not forwarding — check if cursor hit an edge with an adjacent remote screen
+    if let Some((peer_ip, nx, ny)) = find_remote_at_edge(x, y, &layout) {
         // Transition: start forwarding to peer
-        *state.forwarding_to.lock().unwrap() = Some(peer_ip.clone());
-        *state.cursor_on_remote.lock().unwrap() = true;
-        info!("Cursor entró en pantalla remota de {}", peer_ip);
+        info!("Cursor cruzó borde hacia pantalla remota de {}", peer_ip);
 
-        // Snap cursor back to the edge of the nearest local screen so it disappears
+        // Snap cursor to center FIRST with cooldown, before we start forwarding
+        // This prevents the warp event from being processed as a new crossover
         if let Some(local) = primary_local_screen(&layout) {
-            // Use enigo to move cursor back to center of primary local screen
             let center_x = local.x + (local.width as i32 / 2);
             let center_y = local.y + (local.height as i32 / 2);
+            // Set cooldown BEFORE the warp so the warp event is ignored
+            *state.warp_cooldown_until.lock().unwrap() =
+                std::time::Instant::now() + std::time::Duration::from_millis(150);
             if let Some(ref svc) = *state.input_service.lock().unwrap() {
                 let _ = svc.warp_mouse(center_x, center_y);
             }
         }
+
+        // Now set forwarding state
+        *state.forwarding_to.lock().unwrap() = Some(peer_ip.clone());
+        *state.cursor_on_remote.lock().unwrap() = true;
 
         // Notify frontend
         if let Some(ref handle) = *state.app_handle.lock().unwrap() {
             let _ = handle.emit("cursor-on-remote", peer_ip.clone());
         }
 
-        // Send move to remote
+        // Send initial move to remote
         let msg = NetworkMessage::MouseEvent(network::MouseData {
             event_type: network::MouseEventType::Move,
             x: nx,
@@ -378,46 +493,152 @@ fn handle_incoming_message(msg: NetworkMessage, state: &AppState, peer_addr: &st
         NetworkMessage::ScreenLayout(screens) => {
             info!("Recibido layout de pantallas de {}: {} pantalla(s)", peer_addr, screens.len());
             state.remote_screens.lock().unwrap().insert(peer_addr.to_string(), screens.clone());
-            // Rebuild virtual layout
+            // Rebuild virtual layout (respects saved_layout if present)
             rebuild_virtual_layout(state);
         }
+        NetworkMessage::VirtualLayoutUpdate { receiver_relative_x, receiver_relative_y } => {
+            // The sender is telling us where they put OUR screens in their virtual layout.
+            // Mirror it: place THEIR screens at the opposite position relative to our local screens.
+            info!("Recibido VirtualLayoutUpdate de {}: nuestras pantallas a ({}, {})", peer_addr, receiver_relative_x, receiver_relative_y);
+            let local = collect_local_screens();
+            let remote = state.remote_screens.lock().unwrap().clone();
+
+            // The sender placed us at (receiver_relative_x, receiver_relative_y) from their origin.
+            // So we should place them at (-receiver_relative_x, -receiver_relative_y) from our origin.
+            let peer_x_offset = -receiver_relative_x;
+            let peer_y_offset = -receiver_relative_y;
+
+            let mut layout: Vec<VirtualScreen> = local.iter().map(|s| VirtualScreen {
+                id: s.id.clone(),
+                name: s.name.clone(),
+                owner: "local".to_string(),
+                x: s.x,
+                y: s.y,
+                width: s.width,
+                height: s.height,
+                is_primary: s.is_primary,
+            }).collect();
+
+            let max_local_x = local.iter().map(|s| s.x + s.width as i32).max().unwrap_or(1920);
+            for (peer, screens) in &remote {
+                let base_x = if peer == peer_addr {
+                    // Use the mirrored position
+                    max_local_x + peer_x_offset
+                } else {
+                    max_local_x
+                };
+                for s in screens {
+                    layout.push(VirtualScreen {
+                        id: format!("{}-{}", peer, s.id),
+                        name: s.name.clone(),
+                        owner: peer.clone(),
+                        x: base_x + s.x,
+                        y: peer_y_offset + s.y,
+                        width: s.width,
+                        height: s.height,
+                        is_primary: s.is_primary,
+                    });
+                }
+            }
+
+            // Save as the new layout
+            *state.virtual_layout.lock().unwrap() = layout.clone();
+            // Persist
+            let saved: Vec<config::SavedVirtualScreen> = layout.iter().map(|vs| config::SavedVirtualScreen {
+                id: vs.id.clone(),
+                owner: vs.owner.clone(),
+                x: vs.x,
+                y: vs.y,
+                width: vs.width,
+                height: vs.height,
+            }).collect();
+            state.config.lock().unwrap().saved_layout = saved;
+            let _ = state.config.lock().unwrap().save();
+            // Notify frontend
+            if let Some(ref handle) = *state.app_handle.lock().unwrap() {
+                let _ = handle.emit("virtual-layout-changed", ());
+            }
+        }
+        NetworkMessage::CursorReturn => {
+            // Remote peer says to return control here
+            info!("Cursor devuelto por petición del peer remoto ({})", peer_addr);
+            let peer_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            let was_forwarding = {
+                let fwd = state.forwarding_to.lock().unwrap();
+                fwd.as_ref().map(|f| f.starts_with(&peer_ip)).unwrap_or(false)
+            };
+            if was_forwarding {
+                *state.forwarding_to.lock().unwrap() = None;
+                *state.cursor_on_remote.lock().unwrap() = false;
+                // Place cursor at center of the local screen so user can continue
+                let layout = state.virtual_layout.lock().unwrap().clone();
+                if let Some(local) = primary_local_screen(&layout) {
+                    let center_x = local.x + local.width as i32 / 2;
+                    let center_y = local.y + local.height as i32 / 2;
+                    if let Some(ref svc) = *state.input_service.lock().unwrap() {
+                        let _ = svc.warp_mouse(center_x, center_y);
+                    }
+                }
+                if let Some(ref handle) = *state.app_handle.lock().unwrap() {
+                    let _ = handle.emit("cursor-returned-local", ());
+                }
+            }
+        }
         _ => {}
+
     }
     Ok(())
 }
 
-/// Rebuild the virtual_layout from current local+remote screens
+/// Rebuild the virtual_layout from current local+remote screens.
+/// If the config has a saved_layout with matching screen IDs, that is used
+/// to restore positions (so the user's custom arrangement survives reconnects).
 fn rebuild_virtual_layout(state: &AppState) {
     let local = collect_local_screens();
     let remote = state.remote_screens.lock().unwrap().clone();
-    let mut layout: Vec<VirtualScreen> = local.iter().map(|s| VirtualScreen {
-        id: s.id.clone(),
-        name: s.name.clone(),
-        owner: "local".to_string(),
-        x: s.x,
-        y: s.y,
-        width: s.width,
-        height: s.height,
-        is_primary: s.is_primary,
+    let saved = state.config.lock().unwrap().saved_layout.clone();
+
+    // Build a lookup of saved positions by screen ID
+    let saved_pos: std::collections::HashMap<String, (i32, i32)> = saved
+        .iter()
+        .map(|s| (s.id.clone(), (s.x, s.y)))
+        .collect();
+
+    let mut layout: Vec<VirtualScreen> = local.iter().map(|s| {
+        let (x, y) = saved_pos.get(&s.id).copied().unwrap_or((s.x, s.y));
+        VirtualScreen {
+            id: s.id.clone(),
+            name: s.name.clone(),
+            owner: "local".to_string(),
+            x,
+            y,
+            width: s.width,
+            height: s.height,
+            is_primary: s.is_primary,
+        }
     }).collect();
 
-    // Place remote screens to the right of all local screens
+    // Place remote screens — use saved position if available, otherwise default to right
     let max_local_x = local.iter().map(|s| s.x + s.width as i32).max().unwrap_or(1920);
     let mut remote_offset_x = max_local_x;
     for (peer, screens) in &remote {
         for s in screens {
+            let composite_id = format!("{}-{}", peer, s.id);
+            let (x, y) = saved_pos.get(&composite_id).copied().unwrap_or_else(|| {
+                (remote_offset_x + s.x, s.y)
+            });
             layout.push(VirtualScreen {
-                id: format!("{}-{}", peer, s.id),
+                id: composite_id,
                 name: s.name.clone(),
                 owner: peer.clone(),
-                x: remote_offset_x + s.x,
-                y: s.y,
+                x,
+                y,
                 width: s.width,
                 height: s.height,
                 is_primary: s.is_primary,
             });
         }
-        // Advance offset for next peer
+        // Advance default offset for next peer (only used if no saved position)
         remote_offset_x += screens.iter().map(|s| s.width as i32).sum::<i32>();
     }
 
@@ -1570,14 +1791,56 @@ fn get_virtual_layout(state: tauri::State<AppState>) -> Vec<VirtualScreen> {
 }
 
 /// Called from frontend when the user manually repositions screens in the canvas.
-/// Also propagates the new layout to all connected peers so their crossover logic is updated.
+/// Persists the layout to config.json and propagates to all peers for symmetric mirroring.
 #[tauri::command]
 fn set_virtual_layout(layout: Vec<VirtualScreen>, state: tauri::State<AppState>) -> Result<(), String> {
     info!("Layout virtual actualizado con {} pantallas", layout.len());
-    *state.virtual_layout.lock().unwrap() = layout;
-    // Send updated local screen layout to all peers so they can adjust their crossover zones
+
+    // Persist the layout to config so it survives reconnects
+    let saved: Vec<config::SavedVirtualScreen> = layout.iter().map(|vs| config::SavedVirtualScreen {
+        id: vs.id.clone(),
+        owner: vs.owner.clone(),
+        x: vs.x,
+        y: vs.y,
+        width: vs.width,
+        height: vs.height,
+    }).collect();
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.saved_layout = saved;
+        cfg.save()?;
+    }
+
+    // Update in-memory layout
+    *state.virtual_layout.lock().unwrap() = layout.clone();
+
+    // Send our local screen positions to peers so they know our screen layout
     let local_screens = collect_local_screens();
     send_to_all_peers(NetworkMessage::ScreenLayout(local_screens), state.inner());
+
+    // Compute where receiver's screens are in OUR layout and send VirtualLayoutUpdate
+    // so the peer can automatically mirror the arrangement.
+    let conns: Vec<String> = state.connections.lock().unwrap().keys().cloned().collect();
+    for peer_addr in &conns {
+        let peer_ip = peer_addr.split(':').next().unwrap_or(peer_addr);
+        // Find where this peer's screens are placed in our layout
+        if let Some(remote_vs) = layout.iter().find(|v| v.owner == peer_ip || v.owner.starts_with(peer_ip)) {
+            // receiver_relative_x: position of the receiver's screens relative to our local origin
+            let local_origin_x = layout.iter()
+                .filter(|v| v.owner == "local")
+                .map(|v| v.x)
+                .min()
+                .unwrap_or(0);
+            let receiver_relative_x = remote_vs.x - local_origin_x;
+            let receiver_relative_y = remote_vs.y;
+            let msg = NetworkMessage::VirtualLayoutUpdate {
+                receiver_relative_x,
+                receiver_relative_y,
+            };
+            send_to_peer(peer_addr, msg, state.inner());
+        }
+    }
+
     Ok(())
 }
 
