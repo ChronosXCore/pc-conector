@@ -42,6 +42,14 @@ pub struct ScreenConfig {
     pub is_primary: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AudioRoute {
+    pub source_pc: String,
+    pub source_device: String,
+    pub dest_pc: String,
+    pub dest_device: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
     pub input_device: Option<String>,
@@ -50,6 +58,8 @@ pub struct AudioConfig {
     pub stream_speakers: bool,
     pub sample_rate: u32,
     pub bitrate: u32,
+    #[serde(default)]
+    pub routes: Vec<AudioRoute>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +111,7 @@ impl Default for AppConfig {
                 stream_speakers: false,
                 sample_rate: 48000,
                 bitrate: 64000,
+                routes: Vec::new(),
             },
             connection: ConnectionConfig {
                 peer_address: None,

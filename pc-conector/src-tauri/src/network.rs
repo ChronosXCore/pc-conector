@@ -1,4 +1,5 @@
 use crate::config::AppConfig;
+use crate::audio::AudioDeviceInfo;
 use log::info;
 use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
 use std::net::SocketAddr;
@@ -24,10 +25,15 @@ pub enum NetworkMessage {
     Clipboard(String),
     MouseEvent(MouseData),
     KeyboardEvent(KeyboardData),
-    AudioData(Vec<u8>),
+    AudioData { route_id: String, data: Vec<u8> },
     AudioConfig(AudioStreamConfig),
     PeerInfo(String, String),
     ScreenLayout(Vec<ScreenInfo>),
+    StartAudioCapture { device_name: String },
+    StartAudioPlayback { device_name: String },
+    StopAudioCapture,
+    StopAudioPlayback,
+    AudioDevices { inputs: Vec<AudioDeviceInfo>, outputs: Vec<AudioDeviceInfo> },
     Ping,
     Pong,
 }
@@ -137,10 +143,15 @@ fn configure_server() -> Result<ServerConfig, String> {
     let key_der = PrivateKeyDer::try_from(key_der_bytes)
         .map_err(|e| format!("Error en llave privada: {}", e))?;
 
-    let server_config = ServerConfig::with_single_cert(
+    let mut server_config = ServerConfig::with_single_cert(
         vec![cert_der],
         key_der,
     ).map_err(|e| format!("Error en configuración del servidor: {}", e))?;
+
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_idle_timeout(None);
+    transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+    server_config.transport_config(Arc::new(transport_config));
 
     Ok(server_config)
 }
@@ -191,9 +202,14 @@ fn configure_client() -> Result<ClientConfig, String> {
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
         .with_no_client_auth();
 
-    let client_config = ClientConfig::new(Arc::new(
+    let mut client_config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(|e| e.to_string())?
     ));
+
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_idle_timeout(None);
+    transport_config.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+    client_config.transport_config(Arc::new(transport_config));
 
     Ok(client_config)
 }

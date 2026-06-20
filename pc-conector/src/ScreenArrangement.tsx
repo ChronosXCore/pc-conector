@@ -27,7 +27,9 @@ export default function ScreenArrangement() {
   const [saved, setSaved] = useState(false)
   const [dragging, setDragging] = useState<string | null>(null)
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
+  const [hasChanges, setHasChanges] = useState(false)
   const dragOffset = useRef({ x: 0, y: 0 })
+  const originalPositions = useRef<Record<string, { x: number; y: number }>>({})
   const containerRef = useRef<HTMLDivElement>(null)
 
   const refresh = useCallback(async () => {
@@ -47,6 +49,8 @@ export default function ScreenArrangement() {
         pos[vs.id] = { x: vs.x, y: vs.y }
       }
       setPositions(pos)
+      originalPositions.current = { ...pos }
+      setHasChanges(false)
     } catch (e) {
       console.error('Error al obtener pantallas:', e)
     } finally {
@@ -91,7 +95,7 @@ export default function ScreenArrangement() {
 
   const getPos = (s: VirtualScreen) => {
     if (positions[s.id] !== undefined) return positions[s.id]
-    return { x: s.x * SCALE, y: s.y * SCALE }
+    return { x: s.x, y: s.y }
   }
 
   // Drag handlers
@@ -109,9 +113,45 @@ export default function ScreenArrangement() {
       const container = containerRef.current
       if (!container) return
       const cr = container.getBoundingClientRect()
-      const newX = e.clientX - cr.left - dragOffset.current.x
-      const newY = e.clientY - cr.top - dragOffset.current.y
-      setPositions(prev => ({ ...prev, [dragging]: { x: newX, y: newY } }))
+      
+      const screen = combined.find(s => s.id === dragging)
+      if (!screen) return
+      const { h } = getDisplaySize(screen)
+
+      const canvasX = e.clientX - cr.left - dragOffset.current.x
+      const canvasY = e.clientY - cr.top - dragOffset.current.y
+      
+      // Convert canvas pixels back to virtual coordinates
+      const rawVirtualX = Math.round((canvasX - 20) / SCALE)
+      const rawVirtualY = Math.round((canvasY - (canvasH / 2 - h / 2)) / SCALE)
+      
+      // Magnetic snapping: snap to edges of other screens if within 15px (virtual)
+      const SNAP_DIST = 15 / SCALE  // 15 canvas-px → virtual coords
+      let snapX = rawVirtualX
+      let snapY = rawVirtualY
+      for (const other of combined) {
+        if (other.id === dragging) continue
+        const oPos = positions[other.id] ?? { x: other.x, y: other.y }
+        // Snap right edge of other to left edge of dragged
+        if (Math.abs(oPos.x + other.width - rawVirtualX) < SNAP_DIST) snapX = oPos.x + other.width
+        // Snap left edge of other to right edge of dragged
+        if (Math.abs(oPos.x - (rawVirtualX + screen.width)) < SNAP_DIST) snapX = oPos.x - screen.width
+        // Snap top edges
+        if (Math.abs(oPos.y - rawVirtualY) < SNAP_DIST) snapY = oPos.y
+        // Snap bottom edges
+        if (Math.abs(oPos.y + other.height - (rawVirtualY + screen.height)) < SNAP_DIST) snapY = oPos.y + other.height - screen.height
+      }
+      
+      setPositions(prev => {
+        const next = { ...prev, [dragging]: { x: snapX, y: snapY } }
+        // Check if any position differs from original
+        const changed = Object.keys(next).some(id => {
+          const orig = originalPositions.current[id]
+          return !orig || orig.x !== next[id].x || orig.y !== next[id].y
+        })
+        setHasChanges(changed)
+        return next
+      })
     }
     const onUp = () => setDragging(null)
     window.addEventListener('mousemove', onMove)
@@ -120,7 +160,7 @@ export default function ScreenArrangement() {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [dragging])
+  }, [dragging, combined, positions])
 
   const handleApplyLayout = async () => {
     try {
@@ -128,12 +168,19 @@ export default function ScreenArrangement() {
       // Build updated VirtualScreen list with new positions
       const updated: VirtualScreen[] = combined.map(vs => {
         const pos = positions[vs.id]
-        const realX = pos ? Math.round(pos.x / SCALE) : vs.x
-        const realY = pos ? Math.round(pos.y / SCALE) : vs.y
+        const realX = pos ? pos.x : vs.x
+        const realY = pos ? pos.y : vs.y
         return { ...vs, x: realX, y: realY }
       })
       await invoke('set_virtual_layout', { layout: updated })
       setVirtualLayout(updated)
+      // Update originals so hasChanges resets
+      const newOrig: Record<string, { x: number; y: number }> = {}
+      for (const vs of updated) {
+        newOrig[vs.id] = { x: vs.x, y: vs.y }
+      }
+      originalPositions.current = newOrig
+      setHasChanges(false)
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (e) {
@@ -145,7 +192,6 @@ export default function ScreenArrangement() {
 
   const peerCount = Object.keys(remoteScreens).length
   const totalScreens = combined.length
-  const hasUnsavedChanges = dragging === null && Object.keys(positions).length > 0
 
   return (
     <div className="panel">
@@ -162,7 +208,7 @@ export default function ScreenArrangement() {
           <button className="btn btn-small" onClick={refresh} disabled={loading}>
             {loading ? 'Actualizando...' : 'Actualizar'}
           </button>
-          {hasUnsavedChanges && (
+          {hasChanges && (
             <button
               className="btn btn-primary btn-small"
               onClick={handleApplyLayout}
@@ -223,7 +269,7 @@ export default function ScreenArrangement() {
                 const pos = getPos(screen)
                 const isLocal = screen.owner === 'local'
                 const isDraggingThis = dragging === screen.id
-                const cx = 20 + pos.x
+                const cx = 20 + pos.x * SCALE
                 const cy = canvasH / 2 - h / 2 + pos.y * SCALE
 
                 return (

@@ -28,6 +28,7 @@ export interface AppConfig {
     stream_speakers: boolean
     sample_rate: number
     bitrate: number
+    routes: AudioRoute[]
   }
   connection: {
     peer_address: string | null
@@ -66,4 +67,11 @@ export interface ScreenInfo {
   width: number
   height: number
   is_primary: boolean
+}
+
+export interface AudioRoute {
+  source_pc: string
+  source_device: string
+  dest_pc: string
+  dest_device: string
 }

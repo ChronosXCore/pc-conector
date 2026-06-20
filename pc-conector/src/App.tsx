@@ -357,6 +357,7 @@ export default function App() {
               audio={config.audio}
               inputs={audioInputs}
               outputs={audioOutputs}
+              connectedPeers={connectedPeers}
               onUpdate={(audio) => handleUpdateConfig({ ...config, audio })}
             />
           )}

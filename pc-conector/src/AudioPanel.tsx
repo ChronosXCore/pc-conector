@@ -1,5 +1,9 @@
-import type { AudioDevice } from './types'
+import React, { useState, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+import type { AudioDevice, AudioRoute } from './types'
 import { AudioIcon } from './Icons'
+import AudioPatchbay from './AudioPatchbay'
 
 interface AudioPanelProps {
   audio: {
@@ -9,138 +13,145 @@ interface AudioPanelProps {
     stream_speakers: boolean
     sample_rate: number
     bitrate: number
+    routes: AudioRoute[]
   }
   inputs: AudioDevice[]
   outputs: AudioDevice[]
+  connectedPeers: string[]
   onUpdate: (audio: AudioPanelProps['audio']) => void
 }
 
-export default function AudioPanel({ audio, inputs, outputs, onUpdate }: AudioPanelProps) {
+export default function AudioPanel({
+  audio,
+  inputs,
+  outputs,
+  connectedPeers,
+  onUpdate
+}: AudioPanelProps) {
+  const [localHostname, setLocalHostname] = useState<string>('PC Local')
+  const [remoteDevices, setRemoteDevices] = useState<Record<string, [AudioDevice[], AudioDevice[]]>>({})
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
+
+  // 1. Cargar hostname local
+  useEffect(() => {
+    invoke<{ hostname: string }>('get_local_ips')
+      .then((res) => {
+        if (res && res.hostname) {
+          setLocalHostname(res.hostname)
+        }
+      })
+      .catch((e) => console.error('Error al obtener hostname local:', e))
+  }, [])
+
+  // 2. Cargar dispositivos remotos y escuchar actualizaciones
+  const loadRemoteDevices = async () => {
+    try {
+      const res = await invoke<Record<string, [AudioDevice[], AudioDevice[]]>>('get_remote_audio_devices')
+      setRemoteDevices(res)
+    } catch (e) {
+      console.error('Error al obtener dispositivos remotos:', e)
+    }
+  }
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+
+    const setupListener = async () => {
+      try {
+        unlisten = await listen('remote-audio-devices-changed', () => {
+          loadRemoteDevices()
+        })
+      } catch (e) {
+        console.error('Error al configurar listener de audio remoto:', e)
+      }
+    }
+
+    setupListener()
+    loadRemoteDevices()
+
+    // Solicitar a los peers que sincronicen sus dispositivos de audio
+    invoke('refresh_audio_devices').catch((e) => console.error('Error al refrescar dispositivos:', e))
+
+    return () => {
+      if (unlisten) unlisten()
+    }
+  }, [connectedPeers])
+
+  // 3. Aplicar rutas
+  const handleApplyRoutes = async (newRoutes: AudioRoute[]) => {
+    try {
+      setStatusMessage('Aplicando rutas de audio...')
+      await invoke('apply_audio_routes', { routes: newRoutes })
+      onUpdate({ ...audio, routes: newRoutes })
+      setStatusMessage('¡Rutas de audio aplicadas con éxito!')
+      setTimeout(() => setStatusMessage(null), 3000)
+    } catch (e) {
+      setStatusMessage(`Error al aplicar rutas: ${e}`)
+    }
+  }
+
+  const handleCancelRoutes = () => {
+    setStatusMessage('Restaurando configuración previa...')
+    // Restaurar a las guardadas en la config actual
+    setTimeout(() => setStatusMessage(null), 1500)
+  }
+
   return (
-    <div className="panel">
-      <h2>Audio</h2>
-      <p className="panel-subtitle">Configura los dispositivos y la calidad de transmisión de audio</p>
-      
-      <div className="audio-section">
-        <h3>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" x2="12" y1="19" y2="22" />
-          </svg>
-          Micrófono
-        </h3>
-        <div
-          className="toggle-row"
-          onClick={() => onUpdate({ ...audio, stream_microphone: !audio.stream_microphone })}
-        >
-          <span>Transmitir micrófono</span>
-          <div className={`toggle ${audio.stream_microphone ? 'on' : 'off'}`}>
-            <div className="toggle-knob" />
-          </div>
-        </div>
-        
-        {audio.stream_microphone && (
-          <div className="select-group">
-            <label>Dispositivo de entrada</label>
-            <select
-              value={audio.input_device || ''}
-              onChange={(e) => onUpdate({ ...audio, input_device: e.target.value || null })}
-            >
-              <option value="">Predeterminado del sistema</option>
-              {inputs.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
+    <div className="panel audio-panel-layout">
+      <h2>Enrutador de Audio Visual</h2>
+      <p className="panel-subtitle font-medium">
+        Gestiona la transmisión de sonido en tiempo real en la red local.
+      </p>
 
-      <div className="audio-section">
-        <h3>
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-          </svg>
-          Altavoces
-        </h3>
-        <div
-          className="toggle-row"
-          onClick={() => onUpdate({ ...audio, stream_speakers: !audio.stream_speakers })}
-        >
-          <span>Transmitir altavoces</span>
-          <div className={`toggle ${audio.stream_speakers ? 'on' : 'off'}`}>
-            <div className="toggle-knob" />
-          </div>
+      {statusMessage && (
+        <div className={`status-banner ${statusMessage.includes('Error') ? 'error' : 'success'}`}>
+          {statusMessage}
         </div>
-        
-        {audio.stream_speakers && (
-          <div className="select-group">
-            <label>Dispositivo de salida</label>
-            <select
-              value={audio.output_device || ''}
-              onChange={(e) => onUpdate({ ...audio, output_device: e.target.value || null })}
-            >
-              <option value="">Predeterminado del sistema</option>
-              {outputs.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
+      )}
 
-      <div className="audio-section">
+      {/* Canvas del Patchbay */}
+      <AudioPatchbay
+        localHostname={localHostname}
+        localInputs={inputs}
+        localOutputs={outputs}
+        connectedPeers={connectedPeers}
+        remoteDevices={remoteDevices}
+        savedRoutes={audio.routes || []}
+        onApply={handleApplyRoutes}
+        onCancel={handleCancelRoutes}
+      />
+
+      {/* Configuración de Calidad */}
+      <div className="audio-section" style={{ marginTop: '30px' }}>
         <h3>
           <AudioIcon size={18} />
-          Calidad de Audio
+          Ajustes de Calidad y Transmisión
         </h3>
-        <div className="select-group">
-          <label>Frecuencia de muestreo</label>
-          <select
-            value={audio.sample_rate}
-            onChange={(e) => onUpdate({ ...audio, sample_rate: Number(e.target.value) })}
-          >
-            <option value={44100}>44100 Hz (Calidad CD)</option>
-            <option value={48000}>48000 Hz (Calidad de Estudio)</option>
-            <option value={96000}>96000 Hz (Alta resolución)</option>
-          </select>
-        </div>
-        <div className="select-group" style={{ marginTop: '20px' }}>
-          <label>Bitrate de transmisión</label>
-          <select
-            value={audio.bitrate}
-            onChange={(e) => onUpdate({ ...audio, bitrate: Number(e.target.value) })}
-          >
-            <option value={64000}>64 kbps (Bajo consumo)</option>
-            <option value={128000}>128 kbps (Estándar recomendado)</option>
-            <option value={256000}>256 kbps (Ultra nítido)</option>
-          </select>
+        
+        <div className="quality-grid">
+          <div className="select-group">
+            <label>Frecuencia de muestreo</label>
+            <select
+              value={audio.sample_rate}
+              onChange={(e) => onUpdate({ ...audio, sample_rate: Number(e.target.value) })}
+            >
+              <option value={44100}>44100 Hz (Calidad CD)</option>
+              <option value={48000}>48000 Hz (Calidad de Estudio)</option>
+              <option value={96000}>96000 Hz (Alta resolución)</option>
+            </select>
+          </div>
+
+          <div className="select-group">
+            <label>Bitrate de transmisión</label>
+            <select
+              value={audio.bitrate}
+              onChange={(e) => onUpdate({ ...audio, bitrate: Number(e.target.value) })}
+            >
+              <option value={64000}>64 kbps (Bajo consumo)</option>
+              <option value={128000}>128 kbps (Estándar recomendado)</option>
+              <option value={256000}>256 kbps (Ultra nítido)</option>
+            </select>
+          </div>
         </div>
       </div>
     </div>

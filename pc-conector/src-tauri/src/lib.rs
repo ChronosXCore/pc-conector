@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Manager;
 use tauri::Emitter;
+use tauri::tray::TrayIconBuilder;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Virtual layout entry: a screen (local OR remote) placed on the shared canvas
@@ -44,6 +45,8 @@ pub struct AppState {
     pub discovery: Arc<Mutex<Option<DiscoveryService>>>,
     /// Screens reported by remote peers: addr -> list of ScreenInfo
     pub remote_screens: Arc<Mutex<std::collections::HashMap<String, Vec<ScreenInfo>>>>,
+    /// Audio devices reported by remote peers: addr -> (inputs, outputs)
+    pub remote_audio_devices: Arc<Mutex<std::collections::HashMap<String, (Vec<audio::AudioDeviceInfo>, Vec<audio::AudioDeviceInfo>)>>>,
     /// Whether cursor is currently locked to remote (input forwarding active)
     pub cursor_on_remote: Arc<Mutex<bool>>,
     pub app_handle: Arc<Mutex<Option<tauri::AppHandle>>>,
@@ -67,6 +70,7 @@ impl AppState {
             audio_service: Arc::new(Mutex::new(None)),
             discovery: Arc::new(Mutex::new(None)),
             remote_screens: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            remote_audio_devices: Arc::new(Mutex::new(std::collections::HashMap::new())),
             cursor_on_remote: Arc::new(Mutex::new(false)),
             app_handle: Arc::new(Mutex::new(None)),
             pending_approvals: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -116,7 +120,11 @@ fn send_to_all_peers(msg: NetworkMessage, state: &AppState) {
 fn send_to_peer(peer_addr: &str, msg: NetworkMessage, state: &AppState) {
     let conn = {
         let conns = state.connections.lock().unwrap();
-        conns.get(peer_addr).cloned()
+        conns.get(peer_addr).cloned().or_else(|| {
+            conns.keys()
+                .find(|k| k.starts_with(peer_addr))
+                .and_then(|k| conns.get(k).cloned())
+        })
     };
     if let Some(conn) = conn {
         let addr = peer_addr.to_string();
@@ -304,11 +312,67 @@ fn handle_incoming_message(msg: NetworkMessage, state: &AppState, peer_addr: &st
                 input.simulate_keyboard(&data)?;
             }
         }
-        NetworkMessage::AudioData(data) => {
+        NetworkMessage::AudioData { route_id: _, data } => {
             if let Some(ref mut audio) = *state.audio_service.lock().unwrap() {
                 if let Err(e) = audio.play_raw_data(data) {
                     error!("Error al reproducir audio remoto: {}", e);
                 }
+            }
+        }
+        NetworkMessage::StartAudioCapture { device_name } => {
+            info!("Petición remota de iniciar captura en: {}", device_name);
+            let state_clone = state.clone();
+            let peer_addr_clone = peer_addr.to_string();
+            
+            if let Some(ref mut audio) = *state.audio_service.lock().unwrap() {
+                audio.stop();
+            }
+
+            let mut audio = AudioService::new();
+            audio.set_on_encoded_data(move |bytes| {
+                let conn_addr = {
+                    let conns = state_clone.connections.lock().unwrap();
+                    conns.keys().find(|k| k.starts_with(&peer_addr_clone)).cloned()
+                };
+                if let Some(addr) = conn_addr {
+                    send_to_peer(&addr, NetworkMessage::AudioData { route_id: "patchbay".to_string(), data: bytes }, &state_clone);
+                }
+            });
+            if let Err(e) = audio.start_capture(Some(&device_name)) {
+                error!("Error al iniciar captura remota: {}", e);
+            } else {
+                *state.audio_service.lock().unwrap() = Some(audio);
+            }
+        }
+        NetworkMessage::StartAudioPlayback { device_name } => {
+            info!("Petición remota de iniciar reproducción en: {}", device_name);
+            if let Some(ref mut audio) = *state.audio_service.lock().unwrap() {
+                audio.stop();
+            }
+            let mut audio = AudioService::new();
+            if let Err(e) = audio.start_playback(Some(&device_name)) {
+                error!("Error al iniciar reproducción remota: {}", e);
+            } else {
+                *state.audio_service.lock().unwrap() = Some(audio);
+            }
+        }
+        NetworkMessage::StopAudioCapture => {
+            info!("Petición remota de detener captura");
+            if let Some(ref mut audio) = *state.audio_service.lock().unwrap() {
+                audio.stop();
+            }
+        }
+        NetworkMessage::StopAudioPlayback => {
+            info!("Petición remota de detener reproducción");
+            if let Some(ref mut audio) = *state.audio_service.lock().unwrap() {
+                audio.stop();
+            }
+        }
+        NetworkMessage::AudioDevices { inputs, outputs } => {
+            info!("Recibidos dispositivos de audio de {}: inputs={}, outputs={}", peer_addr, inputs.len(), outputs.len());
+            state.remote_audio_devices.lock().unwrap().insert(peer_addr.to_string(), (inputs, outputs));
+            if let Some(ref handle) = *state.app_handle.lock().unwrap() {
+                let _ = handle.emit("remote-audio-devices-changed", ());
             }
         }
         NetworkMessage::ScreenLayout(screens) => {
@@ -430,6 +494,21 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                                     info!("Autenticación exitosa con {} ({})", peer_host, addr);
                                     authenticated = true;
                                     
+                                    // Agregar automáticamente a dispositivos vinculados (linked_devices) de forma bidireccional
+                                    {
+                                        let mut config = state.config.lock().unwrap();
+                                        if !config.linked_devices.iter().any(|d| d.ip == clean_ip) {
+                                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                            config.linked_devices.push(LinkedDevice {
+                                                ip: clean_ip.clone(),
+                                                name: peer_host.clone(),
+                                                linked_at: ts,
+                                            });
+                                            let _ = config.save();
+                                            info!("Dispositivo {} ({}) vinculado automáticamente tras conexión exitosa", peer_host, clean_ip);
+                                        }
+                                    }
+                                    
                                     // Si somos el servidor, enviamos nuestras credenciales en respuesta
                                     if is_server {
                                         send_peer_info(&conn, hostname.clone(), expected_token.clone());
@@ -447,6 +526,7 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                                             }
                                         }
                                     });
+                                    send_audio_devices(&conn);
                                     
                                     emit_connections_changed(&state);
                                     // Rebuild virtual layout now that we have a new peer
@@ -457,6 +537,7 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                                     conn.close(0u32.into(), b"Conexion rechazada");
                                     state.connections.lock().unwrap().remove(&addr);
                                     state.remote_screens.lock().unwrap().remove(&addr);
+                                    state.remote_audio_devices.lock().unwrap().remove(&addr);
                                     emit_connections_changed(&state);
                                     rebuild_virtual_layout(&state);
                                     break;
@@ -466,6 +547,7 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                                 conn.close(0u32.into(), b"Token de seguridad incorrecto");
                                 state.connections.lock().unwrap().remove(&addr);
                                 state.remote_screens.lock().unwrap().remove(&addr);
+                                state.remote_audio_devices.lock().unwrap().remove(&addr);
                                 emit_connections_changed(&state);
                                 break;
                             }
@@ -474,6 +556,7 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                             conn.close(0u32.into(), b"No autenticado");
                             state.connections.lock().unwrap().remove(&addr);
                             state.remote_screens.lock().unwrap().remove(&addr);
+                            state.remote_audio_devices.lock().unwrap().remove(&addr);
                             emit_connections_changed(&state);
                             break;
                         }
@@ -487,6 +570,7 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                     error!("Conexión de red perdida o error al recibir de {}: {}", addr, e);
                     state.connections.lock().unwrap().remove(&addr);
                     state.remote_screens.lock().unwrap().remove(&addr);
+                    state.remote_audio_devices.lock().unwrap().remove(&addr);
                     *state.forwarding_to.lock().unwrap() = None;
                     *state.cursor_on_remote.lock().unwrap() = false;
                     emit_connections_changed(&state);
@@ -874,26 +958,45 @@ async fn start_free_discovery() -> Result<Vec<DiscoveredDevice>, String> {
 #[tauri::command]
 async fn connect_to_peer(addr: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
     info!("Conectando a {}...", addr);
-    let server_addr = addr.clone();
+    let clean_ip = addr.split(':').next().unwrap_or(&addr).to_string();
+    {
+        let conns = state.connections.lock().unwrap();
+        if conns.keys().any(|k| k.starts_with(&clean_ip)) {
+            info!("Ya existe una conexión activa con {}, omitiendo conexión duplicada", clean_ip);
+            return Ok(format!("Ya conectado a {}", clean_ip));
+        }
+    }
+    // Normalise address: if no port was given, use the server port 9876
+    let server_addr = if addr.contains(':') { addr.clone() } else { format!("{}:9876", addr) };
     let conn = NetworkManager::connect(&server_addr, 9876).await?;
-    state.connections.lock().unwrap().insert(addr.clone(), conn.clone());
-    start_receive_loop(conn, state.inner().clone(), addr.clone(), false);
-    Ok(format!("Conectado a {}", addr))
+    // Store connection keyed by the normalized server address so disconnect works
+    state.connections.lock().unwrap().insert(server_addr.clone(), conn.clone());
+    start_receive_loop(conn, state.inner().clone(), server_addr.clone(), false);
+    Ok(format!("Conectado a {}", server_addr))
 }
 
 #[tauri::command]
 fn disconnect_from_peer(addr: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let mut conns = state.connections.lock().unwrap();
-    if let Some(conn) = conns.remove(&addr) {
-        conn.close(0u32.into(), b"Desconectado por el usuario");
-        info!("Desconectado de {}", addr);
+    let clean_ip = addr.split(':').next().unwrap_or(&addr).to_string();
+    // Find the actual key in the map (it may include port or not)
+    let actual_key = {
+        let conns = state.connections.lock().unwrap();
+        conns.keys().find(|k| k.starts_with(&clean_ip)).cloned()
+    };
+    if let Some(key) = actual_key {
+        let mut conns = state.connections.lock().unwrap();
+        if let Some(conn) = conns.remove(&key) {
+            conn.close(0u32.into(), b"Desconectado por el usuario");
+            info!("Desconectado de {}", key);
+        }
     }
-    drop(conns);
-    state.remote_screens.lock().unwrap().remove(&addr);
+    // Also remove by the original addr in case it was stored without prefix search
+    state.remote_screens.lock().unwrap().retain(|k, _| !k.starts_with(&clean_ip));
+    state.remote_audio_devices.lock().unwrap().retain(|k, _| !k.starts_with(&clean_ip));
     // Reset forwarding if we were forwarding to this peer
     let was_forwarding = {
         let fwd = state.forwarding_to.lock().unwrap();
-        fwd.as_deref() == Some(addr.split(':').next().unwrap_or(&addr))
+        fwd.as_deref().map(|f| f.starts_with(&clean_ip)).unwrap_or(false)
     };
     if was_forwarding {
         *state.forwarding_to.lock().unwrap() = None;
@@ -912,6 +1015,8 @@ fn disconnect(state: tauri::State<AppState>) -> Result<(), String> {
         info!("Desconectado de {}", addr);
     }
     drop(conns);
+    state.remote_screens.lock().unwrap().clear();
+    state.remote_audio_devices.lock().unwrap().clear();
     *state.forwarding_to.lock().unwrap() = None;
     *state.cursor_on_remote.lock().unwrap() = false;
     emit_connections_changed(&state);
@@ -938,6 +1043,7 @@ fn get_config(state: tauri::State<AppState>) -> AppConfig {
 fn update_config(config: AppConfig, state: tauri::State<AppState>) -> Result<(), String> {
     config.save()?;
     *state.config.lock().unwrap() = config;
+    init_services(state.inner());
     Ok(())
 }
 
@@ -966,113 +1072,316 @@ fn reject_connection(ip: String, state: tauri::State<AppState>) -> Result<(), St
     Ok(())
 }
 
+fn init_services(state: &AppState) {
+    info!("Inicializando servicios según la configuración...");
+    
+    // 1. Detener servicios existentes primero
+    if let Some(ref clipboard) = *state.clipboard.lock().unwrap() {
+        clipboard.stop_monitoring();
+    }
+    if let Some(ref input) = *state.input_service.lock().unwrap() {
+        input.stop_capture();
+    }
+    if let Some(ref mut audio) = *state.audio_service.lock().unwrap() {
+        audio.stop();
+    }
+    *state.clipboard.lock().unwrap() = None;
+    *state.input_service.lock().unwrap() = None;
+    *state.audio_service.lock().unwrap() = None;
+
+    let config = state.config.lock().unwrap().clone();
+
+    // 2. Iniciar Portapapeles si está activo
+    if config.services.clipboard_sync {
+        let mut clipboard = ClipboardSync::new();
+        match clipboard.init() {
+            Ok(()) => {
+                let state_clone = state.clone();
+                clipboard.set_on_change(move |text| {
+                    info!("Enviando portapapeles local a remoto...");
+                    send_to_all_peers(NetworkMessage::Clipboard(text), &state_clone);
+                });
+                clipboard.start_monitoring();
+                *state.clipboard.lock().unwrap() = Some(clipboard);
+                info!("Servicio de portapapeles iniciado");
+            }
+            Err(e) => {
+                error!("Error al iniciar portapapeles: {}", e);
+            }
+        }
+    }
+
+    // 3. Iniciar Ratón/Teclado si están activos
+    if config.services.mouse_sharing || config.services.keyboard_sharing {
+        let mut input = InputService::new();
+        let state_clone = state.clone();
+        input.set_on_input(move |event| {
+            let is_forwarding = state_clone.forwarding_to.lock().unwrap().is_some();
+            match &event {
+                InputEvent::MouseMove { x, y } => {
+                    handle_mouse_move(*x, *y, &state_clone);
+                    if is_forwarding {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+
+            if is_forwarding {
+                let peer_ip = state_clone.forwarding_to.lock().unwrap().clone();
+                if let Some(peer) = peer_ip {
+                    let conn_addr = {
+                        let conns = state_clone.connections.lock().unwrap();
+                        conns.keys().find(|k| k.starts_with(&peer)).cloned()
+                    };
+                    if let Some(addr) = conn_addr {
+                        let msg = match event {
+                            InputEvent::MousePress { button } => Some(NetworkMessage::MouseEvent(network::MouseData {
+                                event_type: network::MouseEventType::Press,
+                                x: 0.0, y: 0.0,
+                                button: Some(button),
+                                scroll_delta: None,
+                            })),
+                            InputEvent::MouseRelease { button } => Some(NetworkMessage::MouseEvent(network::MouseData {
+                                event_type: network::MouseEventType::Release,
+                                x: 0.0, y: 0.0,
+                                button: Some(button),
+                                scroll_delta: None,
+                            })),
+                            InputEvent::MouseScroll { delta_x, delta_y } => Some(NetworkMessage::MouseEvent(network::MouseData {
+                                event_type: network::MouseEventType::Scroll,
+                                x: 0.0, y: 0.0,
+                                button: None,
+                                scroll_delta: Some((delta_x, delta_y)),
+                            })),
+                            InputEvent::KeyPress { key: _, char } => Some(NetworkMessage::KeyboardEvent(network::KeyboardData {
+                                event_type: network::KeyboardEventType::Press,
+                                key_code: 0,
+                                key_char: char,
+                            })),
+                            InputEvent::KeyRelease { key: _, char } => Some(NetworkMessage::KeyboardEvent(network::KeyboardData {
+                                event_type: network::KeyboardEventType::Release,
+                                key_code: 0,
+                                key_char: char,
+                            })),
+                            _ => None,
+                        };
+                        if let Some(m) = msg {
+                            send_to_peer(&addr, m, &state_clone);
+                        }
+                    }
+                }
+            }
+        });
+
+        match input.start_capture() {
+            Ok(()) => {
+                *state.input_service.lock().unwrap() = Some(input);
+                info!("Servicio de captura de entrada iniciado");
+            }
+            Err(e) => {
+                error!("Error al iniciar captura de entrada: {}", e);
+            }
+        }
+    }
+
+    // 4. Iniciar Audio si está activo
+    if config.services.audio_sharing {
+        let source_route = config.audio.routes.iter().find(|r| r.source_pc == "local");
+        let dest_route = config.audio.routes.iter().find(|r| r.dest_pc == "local");
+
+        if let Some(route) = source_route {
+            let dest_ip = route.dest_pc.clone();
+            let source_device = route.source_device.clone();
+            let dest_device = route.dest_device.clone();
+            
+            let state_clone = state.clone();
+            let dest_ip_clone = dest_ip.clone();
+            
+            let mut audio = AudioService::new();
+            audio.set_on_encoded_data(move |bytes| {
+                let conn_addr = {
+                    let conns = state_clone.connections.lock().unwrap();
+                    conns.keys().find(|k| k.starts_with(&dest_ip_clone)).cloned()
+                };
+                if let Some(addr) = conn_addr {
+                    send_to_peer(&addr, NetworkMessage::AudioData { route_id: "patchbay".to_string(), data: bytes }, &state_clone);
+                }
+            });
+
+            if let Ok(()) = audio.start_capture(Some(&source_device)) {
+                *state.audio_service.lock().unwrap() = Some(audio);
+                info!("Servicio de audio (captura) auto-iniciado en {}", source_device);
+                
+                // Enviar comando para que el remoto inicie playback
+                let conn_addr = {
+                    let conns = state.connections.lock().unwrap();
+                    conns.keys().find(|k| k.starts_with(&dest_ip)).cloned()
+                };
+                if let Some(addr) = conn_addr {
+                    send_to_peer(&addr, NetworkMessage::StartAudioPlayback { device_name: dest_device }, state);
+                }
+            }
+        }
+
+        if let Some(route) = dest_route {
+            let source_ip = route.source_pc.clone();
+            let source_device = route.source_device.clone();
+            let dest_device = route.dest_device.clone();
+
+            let mut audio = AudioService::new();
+            if let Ok(()) = audio.start_playback(Some(&dest_device)) {
+                *state.audio_service.lock().unwrap() = Some(audio);
+                info!("Servicio de audio (reproducción) auto-iniciado en {}", dest_device);
+
+                // Enviar comando para que el remoto inicie captura
+                let conn_addr = {
+                    let conns = state.connections.lock().unwrap();
+                    conns.keys().find(|k| k.starts_with(&source_ip)).cloned()
+                };
+                if let Some(addr) = conn_addr {
+                    send_to_peer(&addr, NetworkMessage::StartAudioCapture { device_name: source_device }, state);
+                }
+            }
+        }
+    }
+}
+
+fn send_audio_devices(conn: &quinn::Connection) {
+    let audio = AudioService::new();
+    if let Ok((inputs, outputs)) = audio.list_devices() {
+        let msg = NetworkMessage::AudioDevices { inputs, outputs };
+        let conn_clone = conn.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(bytes) = serde_json::to_vec(&msg) {
+                if let Ok(mut send) = conn_clone.open_uni().await {
+                    let _ = send.write_all(&bytes).await;
+                    let _ = send.finish();
+                }
+            }
+        });
+    }
+}
+
+#[tauri::command]
+fn get_remote_audio_devices(state: tauri::State<AppState>) -> std::collections::HashMap<String, (Vec<audio::AudioDeviceInfo>, Vec<audio::AudioDeviceInfo>)> {
+    state.remote_audio_devices.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn refresh_audio_devices(state: tauri::State<AppState>) -> Result<(), String> {
+    let conns = state.connections.lock().unwrap().clone();
+    for (_, conn) in conns {
+        send_audio_devices(&conn);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn apply_audio_routes(routes: Vec<config::AudioRoute>, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    info!("Aplicando rutas de audio: {:?}", routes);
+    
+    // Guardar rutas en config
+    {
+        let mut config = state.config.lock().unwrap();
+        config.audio.routes = routes.clone();
+        let _ = config.save();
+    }
+
+    // Detener streams actuales por si acaso
+    if let Some(ref mut audio) = *state.audio_service.lock().unwrap() {
+        audio.stop();
+    }
+
+    // Buscar si hay una ruta donde somos el origen (captura)
+    let source_route = routes.iter().find(|r| r.source_pc == "local");
+    // Buscar si hay una ruta donde somos el destino (reproducción)
+    let dest_route = routes.iter().find(|r| r.dest_pc == "local");
+
+    // 1. Si somos origen de alguna ruta, iniciamos captura local y le decimos al destino remoto que empiece reproducción
+    if let Some(route) = source_route {
+        let dest_ip = route.dest_pc.clone();
+        let source_device = route.source_device.clone();
+        let dest_device = route.dest_device.clone();
+        
+        let state_clone = state.inner().clone();
+        let dest_ip_clone = dest_ip.clone();
+        
+        // Inicializar servicio si es necesario
+        let mut audio = AudioService::new();
+        audio.set_on_encoded_data(move |bytes| {
+            let conn_addr = {
+                let conns = state_clone.connections.lock().unwrap();
+                conns.keys().find(|k| k.starts_with(&dest_ip_clone)).cloned()
+            };
+            if let Some(addr) = conn_addr {
+                send_to_peer(&addr, NetworkMessage::AudioData { route_id: "patchbay".to_string(), data: bytes }, &state_clone);
+            }
+        });
+
+        info!("Iniciando captura local para ruta en: {}", source_device);
+        audio.start_capture(Some(&source_device))?;
+        *state.audio_service.lock().unwrap() = Some(audio);
+
+        // Notificar al remoto que empiece a reproducir
+        let conn_addr = {
+            let conns = state.connections.lock().unwrap();
+            conns.keys().find(|k| k.starts_with(&dest_ip)).cloned()
+        };
+        if let Some(addr) = conn_addr {
+            send_to_peer(&addr, NetworkMessage::StartAudioPlayback { device_name: dest_device }, state.inner());
+        }
+    }
+
+    // 2. Si somos destino de alguna ruta, iniciamos reproducción local y le decimos al origen remoto que empiece captura
+    if let Some(route) = dest_route {
+        let source_ip = route.source_pc.clone();
+        let source_device = route.source_device.clone();
+        let dest_device = route.dest_device.clone();
+
+        let mut audio = AudioService::new();
+        info!("Iniciando reproducción local en dispositivo: {}", dest_device);
+        audio.start_playback(Some(&dest_device))?;
+        *state.audio_service.lock().unwrap() = Some(audio);
+
+        // Notificar al remoto que empiece a capturar
+        let conn_addr = {
+            let conns = state.connections.lock().unwrap();
+            conns.keys().find(|k| k.starts_with(&source_ip)).cloned()
+        };
+        if let Some(addr) = conn_addr {
+            send_to_peer(&addr, NetworkMessage::StartAudioCapture { device_name: source_device }, state.inner());
+        }
+    }
+
+    // Si no somos ni origen ni destino de ninguna ruta activa, nos aseguramos de que el remoto detenga sus streams si estaban vinculados a nosotros
+    if source_route.is_none() && dest_route.is_none() {
+        // Enviar parada general a todos
+        let conns = state.connections.lock().unwrap().clone();
+        for addr in conns.keys() {
+            send_to_peer(addr, NetworkMessage::StopAudioCapture, state.inner());
+            send_to_peer(addr, NetworkMessage::StopAudioPlayback, state.inner());
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn start_clipboard_sync(state: tauri::State<AppState>) -> Result<(), String> {
-    let mut clipboard = ClipboardSync::new();
-    clipboard.init()?;
-    let state_clone = state.inner().clone();
-    clipboard.set_on_change(move |text| {
-        info!("Enviando portapapeles local a remoto...");
-        send_to_all_peers(NetworkMessage::Clipboard(text), &state_clone);
-    });
-    clipboard.start_monitoring();
-    *state.clipboard.lock().unwrap() = Some(clipboard);
+    init_services(state.inner());
     Ok(())
 }
 
 #[tauri::command]
 fn start_input_capture(state: tauri::State<AppState>) -> Result<(), String> {
-    let mut input = InputService::new();
-    let state_clone = state.inner().clone();
-    input.set_on_input(move |event| {
-        let is_forwarding = state_clone.forwarding_to.lock().unwrap().is_some();
-        
-        match &event {
-            InputEvent::MouseMove { x, y } => {
-                // Always process mouse moves through edge detection
-                handle_mouse_move(*x, *y, &state_clone);
-                if is_forwarding {
-                    return; // Don't send raw move again, handle_mouse_move does it
-                }
-            }
-            _ => {}
-        }
-
-        // For non-move events: forward to remote if cursor is there
-        if is_forwarding {
-            let peer_ip = state_clone.forwarding_to.lock().unwrap().clone();
-            if let Some(peer) = peer_ip {
-                // Find connection with matching IP
-                let conn_addr = {
-                    let conns = state_clone.connections.lock().unwrap();
-                    conns.keys().find(|k| k.starts_with(&peer)).cloned()
-                };
-                if let Some(addr) = conn_addr {
-                    let msg = match event {
-                        InputEvent::MousePress { button } => Some(NetworkMessage::MouseEvent(network::MouseData {
-                            event_type: network::MouseEventType::Press,
-                            x: 0.0, y: 0.0,
-                            button: Some(button),
-                            scroll_delta: None,
-                        })),
-                        InputEvent::MouseRelease { button } => Some(NetworkMessage::MouseEvent(network::MouseData {
-                            event_type: network::MouseEventType::Release,
-                            x: 0.0, y: 0.0,
-                            button: Some(button),
-                            scroll_delta: None,
-                        })),
-                        InputEvent::MouseScroll { delta_x, delta_y } => Some(NetworkMessage::MouseEvent(network::MouseData {
-                            event_type: network::MouseEventType::Scroll,
-                            x: 0.0, y: 0.0,
-                            button: None,
-                            scroll_delta: Some((delta_x, delta_y)),
-                        })),
-                        InputEvent::KeyPress { key: _, char } => Some(NetworkMessage::KeyboardEvent(network::KeyboardData {
-                            event_type: network::KeyboardEventType::Press,
-                            key_code: 0,
-                            key_char: char,
-                        })),
-                        InputEvent::KeyRelease { key: _, char } => Some(NetworkMessage::KeyboardEvent(network::KeyboardData {
-                            event_type: network::KeyboardEventType::Release,
-                            key_code: 0,
-                            key_char: char,
-                        })),
-                        _ => None,
-                    };
-                    if let Some(m) = msg {
-                        send_to_peer(&addr, m, &state_clone);
-                    }
-                    return;
-                }
-            }
-        }
-
-        // Local — not forwarding (or not a forwarded event)
-        match event {
-            InputEvent::MouseMove { .. } => {} // already handled above
-            _ => {
-                // Do not re-send local events to peers when mouse is local
-            }
-        }
-    });
-    input.start_capture()?;
-    *state.input_service.lock().unwrap() = Some(input);
+    init_services(state.inner());
     Ok(())
 }
 
 #[tauri::command]
 fn start_audio_capture(state: tauri::State<AppState>) -> Result<(), String> {
-    let mut audio = AudioService::new();
-    let config = state.config.lock().unwrap();
-    let input_device = config.audio.input_device.as_deref();
-    let output_device = config.audio.output_device.as_deref();
-    let state_clone = state.inner().clone();
-    audio.set_on_encoded_data(move |encoded_bytes| {
-        send_to_all_peers(NetworkMessage::AudioData(encoded_bytes), &state_clone);
-    });
-    if config.audio.stream_microphone { audio.start_capture(input_device)?; }
-    if config.audio.stream_speakers { audio.start_playback(output_device)?; }
-    *state.audio_service.lock().unwrap() = Some(audio);
+    init_services(state.inner());
     Ok(())
 }
 
@@ -1260,11 +1569,15 @@ fn get_virtual_layout(state: tauri::State<AppState>) -> Vec<VirtualScreen> {
     state.virtual_layout.lock().unwrap().clone()
 }
 
-/// Called from frontend when the user manually repositions screens in the canvas
+/// Called from frontend when the user manually repositions screens in the canvas.
+/// Also propagates the new layout to all connected peers so their crossover logic is updated.
 #[tauri::command]
 fn set_virtual_layout(layout: Vec<VirtualScreen>, state: tauri::State<AppState>) -> Result<(), String> {
     info!("Layout virtual actualizado con {} pantallas", layout.len());
     *state.virtual_layout.lock().unwrap() = layout;
+    // Send updated local screen layout to all peers so they can adjust their crossover zones
+    let local_screens = collect_local_screens();
+    send_to_all_peers(NetworkMessage::ScreenLayout(local_screens), state.inner());
     Ok(())
 }
 
@@ -1307,6 +1620,106 @@ fn set_cursor_on_remote(value: bool, state: tauri::State<AppState>) {
     }
 }
 
+#[tauri::command]
+async fn toggle_wifi_hotspot(enable: bool) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let action = if enable { "StartTetheringAsync" } else { "StopTetheringAsync" };
+        let cmd = format!(
+            "$profile = Get-NetConnectionProfile | Where-Object {{ $_.IPv4Connectivity -eq 'Internet' }} | Select-Object -First 1; \
+             if (-not $profile) {{ $profile = Get-NetConnectionProfile | Select-Object -First 1 }}; \
+             if (-not $profile) {{ throw 'No hay interfaz de red activa para compartir.' }}; \
+             $manager = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType = WindowsRuntime]::CreateFromConnectionProfile($profile); \
+             $asyncOp = $manager.{}(); \
+             $asyncOp.GetResults()",
+            action
+        );
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &cmd])
+            .output();
+        match output {
+            Ok(out) => {
+                if out.status.success() {
+                    Ok(if enable { "Punto de acceso iniciado con éxito." } else { "Punto de acceso detenido." }.to_string())
+                } else {
+                    let err = String::from_utf8_lossy(&out.stderr).to_string();
+                    Err(format!("Error de configuración: {}", err))
+                }
+            }
+            Err(e) => Err(e.to_string())
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if enable {
+            let output = std::process::Command::new("nmcli")
+                .args(["device", "wifi", "hotspot", "ssid", "NetBridgeHotspot", "password", "netbridge1234"])
+                .output();
+            match output {
+                Ok(out) => {
+                    if out.status.success() {
+                        Ok("Punto de acceso creado (NetBridgeHotspot / netbridge1234)".to_string())
+                    } else {
+                        Err(String::from_utf8_lossy(&out.stderr).to_string())
+                    }
+                }
+                Err(e) => Err(e.to_string())
+            }
+        } else {
+            let _ = std::process::Command::new("nmcli").args(["connection", "down", "Hotspot"]).status();
+            Ok("Punto de acceso desactivado".to_string())
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Err("No soportado en este sistema operativo".to_string())
+    }
+}
+
+#[tauri::command]
+async fn get_wifi_hotspot_status() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let cmd = " \
+             $profile = Get-NetConnectionProfile | Where-Object { $_.IPv4Connectivity -eq 'Internet' } | Select-Object -First 1; \
+             if (-not $profile) { $profile = Get-NetConnectionProfile | Select-Object -First 1 }; \
+             if (-not $profile) { Write-Output 'Off'; exit }; \
+             $manager = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType = WindowsRuntime]::CreateFromConnectionProfile($profile); \
+             Write-Output $manager.TetheringOperationalState";
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", cmd])
+            .output();
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                Ok(stdout)
+            }
+            Err(e) => Err(e.to_string())
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let output = std::process::Command::new("nmcli")
+            .args(["-t", "-f", "NAME,ACTIVE", "connection", "show", "--active"])
+            .output();
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("Hotspot") {
+                    Ok("On".to_string())
+                } else {
+                    Ok("Off".to_string())
+                }
+            }
+            Err(e) => Err(e.to_string())
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        Ok("Off".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1333,6 +1746,9 @@ pub fn run() {
 
             // Build initial virtual layout from local screens
             rebuild_virtual_layout(&state);
+
+            // Inicializar servicios KVM (mouse, portapapeles, etc.) según la configuración
+            init_services(&state);
 
             // Iniciar servidor QUIC en puerto 9876
             tauri::async_runtime::spawn(async move {
@@ -1372,20 +1788,74 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     for device in linked {
-                        info!("Auto-conectando a: {} ({})", device.name, device.ip);
-                        match NetworkManager::connect(&device.ip, 9876).await {
+                        // Normalize address to include port
+                        let addr_with_port = if device.ip.contains(':') { device.ip.clone() } else { format!("{}:9876", device.ip) };
+                        info!("Auto-conectando a: {} ({}) => {}", device.name, device.ip, addr_with_port);
+                        match NetworkManager::connect(&addr_with_port, 9876).await {
                             Ok(conn) => {
-                                state_auto.connections.lock().unwrap().insert(device.ip.clone(), conn.clone());
-                                start_receive_loop(conn, state_auto.clone(), device.ip.clone(), false);
-                                info!("Auto-conexión exitosa a {}", device.ip);
+                                state_auto.connections.lock().unwrap().insert(addr_with_port.clone(), conn.clone());
+                                start_receive_loop(conn, state_auto.clone(), addr_with_port.clone(), false);
+                                info!("Auto-conexión exitosa a {}", addr_with_port);
                             }
-                            Err(e) => { warn!("No se pudo auto-conectar a {}: {}", device.ip, e); }
+                            Err(e) => { warn!("No se pudo auto-conectar a {}: {}", addr_with_port, e); }
                         }
                     }
                 });
             }
+
+            // ── System Tray ──────────────────────────────────────────────
+            let show_item = tauri::menu::MenuItem::with_id(app, "show", "Mostrar NetBridge", true, None::<&str>)?;
+            let quit_item = tauri::menu::MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
+            let tray_menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
+            let _tray = TrayIconBuilder::new()
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .icon(app.default_window_icon().cloned().unwrap())
+                .tooltip("NetBridge")
+                .on_menu_event(|app_handle, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(win) = app_handle.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            info!("Saliendo de NetBridge desde la bandeja");
+                            app_handle.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::DoubleClick { button: tauri::tray::MouseButton::Left, .. } = event {
+                        if let Some(win) = tray.app_handle().get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                })
+                .build(app)?;
+            // ─────────────────────────────────────────────────────────────
             
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let minimize = {
+                    // Access app state to check minimize_to_tray setting
+                    if let Some(state) = window.try_state::<AppState>() {
+                        state.config.lock().unwrap().general.minimize_to_tray
+                    } else {
+                        false
+                    }
+                };
+                if minimize {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    info!("Ventana minimizada a bandeja del sistema");
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             start_discovery,
@@ -1416,6 +1886,11 @@ pub fn run() {
             get_linked_devices,
             get_cursor_on_remote,
             set_cursor_on_remote,
+            toggle_wifi_hotspot,
+            get_wifi_hotspot_status,
+            apply_audio_routes,
+            get_remote_audio_devices,
+            refresh_audio_devices,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

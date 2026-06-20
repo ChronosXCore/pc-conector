@@ -118,6 +118,7 @@ gantt
 | Fase 1-4 | v0.5.0 | Funciones core: Input, Clipboard, Audio, mDNS | ✅ |
 | Pulido Final | v1.0.0 | Modo oscuro/claro, panel de rendimiento, íconos SVG, detección de marcas | ✅ |
 | 2026-06-07 | v1.1.0 | Rebranding a NetBridge, Vinculación persistente, auto-conexión, barra de conectados, y layout multipantalla multi-PC | ✅ |
+| 2026-06-20 | v1.2.0 | **System Tray** (minimizar a bandeja), **Audio Patchbay Visual** (canvas SVG interactivo, rutas dinámicas por cable), correcciones de bugs (connect/disconnect, layout, cursor crossover), broadcast de dispositivos de audio entre peers | ✅ |
 
 ---
 

@@ -2,8 +2,13 @@
 .rustup/
 rustup-home/
 cargo-cache/
+cargo_home/
 npm-cache/
 npm-prefix/
+pc-conector-target/
+pc_conector_temp/
+winlibs/
+winlibs.zip
 
 # Standard Tauri / Rust / Node ignores
 **/node_modules/
