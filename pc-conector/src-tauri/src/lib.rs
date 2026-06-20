@@ -366,6 +366,9 @@ fn handle_mouse_move(x: f64, y: f64, state: &AppState) {
         // Now set forwarding state
         *state.forwarding_to.lock().unwrap() = Some(peer_ip.clone());
         *state.cursor_on_remote.lock().unwrap() = true;
+        if let Some(ref svc) = *state.input_service.lock().unwrap() {
+            svc.set_forwarding_active(true);
+        }
 
         // Notify frontend
         if let Some(ref handle) = *state.app_handle.lock().unwrap() {
@@ -484,15 +487,17 @@ fn handle_incoming_message(msg: NetworkMessage, state: &AppState, peer_addr: &st
             }
         }
         NetworkMessage::AudioDevices { inputs, outputs } => {
-            info!("Recibidos dispositivos de audio de {}: inputs={}, outputs={}", peer_addr, inputs.len(), outputs.len());
-            state.remote_audio_devices.lock().unwrap().insert(peer_addr.to_string(), (inputs, outputs));
+            let clean_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            info!("Recibido dispositivos de audio de {}: inputs={}, outputs={}", clean_ip, inputs.len(), outputs.len());
+            state.remote_audio_devices.lock().unwrap().insert(clean_ip, (inputs, outputs));
             if let Some(ref handle) = *state.app_handle.lock().unwrap() {
                 let _ = handle.emit("remote-audio-devices-changed", ());
             }
         }
         NetworkMessage::ScreenLayout(screens) => {
-            info!("Recibido layout de pantallas de {}: {} pantalla(s)", peer_addr, screens.len());
-            state.remote_screens.lock().unwrap().insert(peer_addr.to_string(), screens.clone());
+            let clean_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            info!("Recibido layout de pantallas de {}: {} pantalla(s)", clean_ip, screens.len());
+            state.remote_screens.lock().unwrap().insert(clean_ip, screens.clone());
             // Rebuild virtual layout (respects saved_layout if present)
             rebuild_virtual_layout(state);
         }
@@ -570,6 +575,9 @@ fn handle_incoming_message(msg: NetworkMessage, state: &AppState, peer_addr: &st
             if was_forwarding {
                 *state.forwarding_to.lock().unwrap() = None;
                 *state.cursor_on_remote.lock().unwrap() = false;
+                if let Some(ref svc) = *state.input_service.lock().unwrap() {
+                    svc.set_forwarding_active(false);
+                }
                 // Place cursor at center of the local screen so user can continue
                 let layout = state.virtual_layout.lock().unwrap().clone();
                 if let Some(local) = primary_local_screen(&layout) {
@@ -648,6 +656,7 @@ fn rebuild_virtual_layout(state: &AppState) {
 /// Inicia el bucle receptor de mensajes en segundo plano para una conexión activa
 fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is_server: bool) {
     tauri::async_runtime::spawn(async move {
+        let clean_ip = addr.split(':').next().unwrap_or(&addr).to_string();
         info!("Iniciando bucle de recepción para peer {} (servidor: {})...", addr, is_server);
         
         let hostname = whoami::fallible::hostname().unwrap_or_else(|_| "PC-Desconocido".to_string());
@@ -667,7 +676,6 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                         if let NetworkMessage::PeerInfo(peer_host, peer_token) = msg {
                             if peer_token == expected_token {
                                 // Use a block so the MutexGuard is dropped before any await
-                                let clean_ip = addr.split(':').next().unwrap_or(&addr).to_string();
                                 let (require_app, is_pre_approved) = {
                                     let config = state.config.lock().unwrap();
                                     let ra = config.connection.require_approval;
@@ -757,8 +765,8 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                                     warn!("Conexión rechazada para {} ({})", peer_host, addr);
                                     conn.close(0u32.into(), b"Conexion rechazada");
                                     state.connections.lock().unwrap().remove(&addr);
-                                    state.remote_screens.lock().unwrap().remove(&addr);
-                                    state.remote_audio_devices.lock().unwrap().remove(&addr);
+                                    state.remote_screens.lock().unwrap().remove(&clean_ip);
+                                    state.remote_audio_devices.lock().unwrap().remove(&clean_ip);
                                     emit_connections_changed(&state);
                                     rebuild_virtual_layout(&state);
                                     break;
@@ -767,8 +775,8 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                                 warn!("Token inválido recibido de {} ({}). Cerrando conexión.", peer_host, addr);
                                 conn.close(0u32.into(), b"Token de seguridad incorrecto");
                                 state.connections.lock().unwrap().remove(&addr);
-                                state.remote_screens.lock().unwrap().remove(&addr);
-                                state.remote_audio_devices.lock().unwrap().remove(&addr);
+                                state.remote_screens.lock().unwrap().remove(&clean_ip);
+                                state.remote_audio_devices.lock().unwrap().remove(&clean_ip);
                                 emit_connections_changed(&state);
                                 break;
                             }
@@ -776,8 +784,8 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                             warn!("Mensaje no autorizado recibido antes de autenticar de {}. Cerrando.", addr);
                             conn.close(0u32.into(), b"No autenticado");
                             state.connections.lock().unwrap().remove(&addr);
-                            state.remote_screens.lock().unwrap().remove(&addr);
-                            state.remote_audio_devices.lock().unwrap().remove(&addr);
+                            state.remote_screens.lock().unwrap().remove(&clean_ip);
+                            state.remote_audio_devices.lock().unwrap().remove(&clean_ip);
                             emit_connections_changed(&state);
                             break;
                         }
@@ -790,10 +798,13 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                 Err(e) => {
                     error!("Conexión de red perdida o error al recibir de {}: {}", addr, e);
                     state.connections.lock().unwrap().remove(&addr);
-                    state.remote_screens.lock().unwrap().remove(&addr);
-                    state.remote_audio_devices.lock().unwrap().remove(&addr);
+                    state.remote_screens.lock().unwrap().remove(&clean_ip);
+                    state.remote_audio_devices.lock().unwrap().remove(&clean_ip);
                     *state.forwarding_to.lock().unwrap() = None;
                     *state.cursor_on_remote.lock().unwrap() = false;
+                    if let Some(ref svc) = *state.input_service.lock().unwrap() {
+                        svc.set_forwarding_active(false);
+                    }
                     emit_connections_changed(&state);
                     rebuild_virtual_layout(&state);
                     break;
@@ -1214,7 +1225,6 @@ fn disconnect_from_peer(addr: String, state: tauri::State<AppState>) -> Result<(
     // Also remove by the original addr in case it was stored without prefix search
     state.remote_screens.lock().unwrap().retain(|k, _| !k.starts_with(&clean_ip));
     state.remote_audio_devices.lock().unwrap().retain(|k, _| !k.starts_with(&clean_ip));
-    // Reset forwarding if we were forwarding to this peer
     let was_forwarding = {
         let fwd = state.forwarding_to.lock().unwrap();
         fwd.as_deref().map(|f| f.starts_with(&clean_ip)).unwrap_or(false)
@@ -1222,6 +1232,9 @@ fn disconnect_from_peer(addr: String, state: tauri::State<AppState>) -> Result<(
     if was_forwarding {
         *state.forwarding_to.lock().unwrap() = None;
         *state.cursor_on_remote.lock().unwrap() = false;
+        if let Some(ref svc) = *state.input_service.lock().unwrap() {
+            svc.set_forwarding_active(false);
+        }
     }
     emit_connections_changed(&state);
     rebuild_virtual_layout(&state);
@@ -1240,6 +1253,9 @@ fn disconnect(state: tauri::State<AppState>) -> Result<(), String> {
     state.remote_audio_devices.lock().unwrap().clear();
     *state.forwarding_to.lock().unwrap() = None;
     *state.cursor_on_remote.lock().unwrap() = false;
+    if let Some(ref svc) = *state.input_service.lock().unwrap() {
+        svc.set_forwarding_active(false);
+    }
     emit_connections_changed(&state);
     rebuild_virtual_layout(&state);
     Ok(())
@@ -1880,6 +1896,9 @@ fn set_cursor_on_remote(value: bool, state: tauri::State<AppState>) {
     *state.cursor_on_remote.lock().unwrap() = value;
     if !value {
         *state.forwarding_to.lock().unwrap() = None;
+        if let Some(ref svc) = *state.input_service.lock().unwrap() {
+            svc.set_forwarding_active(false);
+        }
     }
 }
 
@@ -2155,6 +2174,14 @@ pub fn run() {
             get_remote_audio_devices,
             refresh_audio_devices,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                #[cfg(target_os = "windows")]
+                unsafe {
+                    input::set_system_cursors_hidden(false);
+                }
+            }
+        });
 }

@@ -3,7 +3,7 @@ use enigo::{
     Coordinate, Direction, Enigo, Key, Keyboard as EnigoKeyboard, Mouse as EnigoMouse, Settings,
 };
 use log::{info, error};
-use rdev::{listen, Event, EventType};
+use rdev::{grab, Event, EventType};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -27,6 +27,7 @@ pub struct InputService {
     on_input: Option<InputCallback>,
     #[allow(dead_code)]
     mouse_locked: Arc<Mutex<bool>>,
+    pub forwarding_active: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl InputService {
@@ -38,6 +39,14 @@ impl InputService {
             is_capturing: Arc::new(Mutex::new(false)),
             on_input: None,
             mouse_locked: Arc::new(Mutex::new(false)),
+            forwarding_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    pub fn set_forwarding_active(&self, active: bool) {
+        self.forwarding_active.store(active, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            set_system_cursors_hidden(active);
         }
     }
 
@@ -56,15 +65,19 @@ impl InputService {
 
         let callback = self.on_input.clone();
         let capturing = self.is_capturing.clone();
+        let forwarding = self.forwarding_active.clone();
 
         thread::spawn(move || {
             let callback = callback;
             let capturing = capturing;
+            let forwarding = forwarding;
 
-            if let Err(e) = listen(move |event: Event| {
+            if let Err(e) = grab(move |event: Event| {
                 if !*capturing.lock().unwrap() {
-                    return;
+                    return Some(event);
                 }
+
+                let active = forwarding.load(std::sync::atomic::Ordering::Relaxed);
 
                 if let Some(ref cb) = callback {
                     let input_event = match event.event_type {
@@ -94,12 +107,21 @@ impl InputService {
                         }
                     };
 
-                    if let Some(event) = input_event {
-                        cb(event);
+                    if let Some(ev) = input_event {
+                        cb(ev);
                     }
                 }
+
+                if active {
+                    match event.event_type {
+                        EventType::MouseMove { .. } => Some(event),
+                        _ => None,
+                    }
+                } else {
+                    Some(event)
+                }
             }) {
-                error!("Error en captura de entrada: {:?}", e);
+                error!("Error en grab de entrada: {:?}", e);
             }
         });
 
@@ -340,3 +362,87 @@ fn parse_special_key(s: &str) -> Option<Key> {
         _ => None,
     }
 }
+
+impl Drop for InputService {
+    fn drop(&mut self) {
+        unsafe {
+            set_system_cursors_hidden(false);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub unsafe fn set_system_cursors_hidden(hide: bool) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn CreateCursor(
+            hInst: *mut std::ffi::c_void,
+            xHotSpot: i32,
+            yHotSpot: i32,
+            nWidth: i32,
+            nHeight: i32,
+            pvANDPlane: *const u8,
+            pvXORPlane: *const u8,
+        ) -> *mut std::ffi::c_void;
+        fn SetSystemCursor(
+            hcur: *mut std::ffi::c_void,
+            id: u32,
+        ) -> i32;
+        fn SystemParametersInfoW(
+            uiAction: u32,
+            uiParam: u32,
+            pvParam: *mut std::ffi::c_void,
+            fWinIni: u32,
+        ) -> i32;
+    }
+
+    const SPI_SETCURSORS: u32 = 0x0057;
+    const SPIF_SENDCHANGE: u32 = 0x0002;
+
+    const OCR_NORMAL: u32 = 32512;
+    const OCR_IBEAM: u32 = 32513;
+    const OCR_WAIT: u32 = 32514;
+    const OCR_CROSS: u32 = 32515;
+    const OCR_UP: u32 = 32516;
+    const OCR_SIZENWSE: u32 = 32642;
+    const OCR_SIZENESW: u32 = 32643;
+    const OCR_SIZEWE: u32 = 32644;
+    const OCR_SIZENS: u32 = 32645;
+    const OCR_SIZEALL: u32 = 32646;
+    const OCR_NO: u32 = 32648;
+    const OCR_HAND: u32 = 32649;
+    const OCR_APPSTARTING: u32 = 32650;
+
+    let cursor_ids = [
+        OCR_NORMAL, OCR_IBEAM, OCR_WAIT, OCR_CROSS, OCR_UP,
+        OCR_SIZENWSE, OCR_SIZENESW, OCR_SIZEWE, OCR_SIZENS,
+        OCR_SIZEALL, OCR_NO, OCR_HAND, OCR_APPSTARTING,
+    ];
+
+    if hide {
+        let and_mask = [0xFFu8; 128];
+        let xor_mask = [0x00u8; 128];
+        for &id in &cursor_ids {
+            let h_cursor = CreateCursor(
+                std::ptr::null_mut(),
+                0,
+                0,
+                32,
+                32,
+                and_mask.as_ptr(),
+                xor_mask.as_ptr(),
+            );
+            if !h_cursor.is_null() {
+                SetSystemCursor(h_cursor, id);
+            }
+        }
+    } else {
+        SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), SPIF_SENDCHANGE);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub unsafe fn set_system_cursors_hidden(_hide: bool) {
+    // No-op on non-Windows
+}
+
