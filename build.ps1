@@ -1,22 +1,29 @@
 # ============================================================
-# build.ps1  -  PC Conector - Script de Compilacion Completo
+# build.ps1  -  NetBridge - Script de Compilacion Completo
 # Uso: .\build.ps1          -> compila el instalador
 #      .\build.ps1 -Dev     -> inicia en modo desarrollo
 # ============================================================
 param([switch]$Dev)
 
-# Configurar rutas de Rust/Cargo (GNU toolchain - no requiere Visual Studio)
+# Configurar rutas de Rust/Cargo con msys64 y wrapper cmake para compat con CMake 4.x
 $env:RUSTUP_HOME = "F:\Programas Desarrollados\Pc conector\rustup-home"
 $env:CARGO_HOME  = "F:\Programas Desarrollados\Pc conector\cargo-cache"
-$env:PATH = "F:\Programas Desarrollados\Pc conector\cargo-cache\bin;" +
-            "F:\Programas Desarrollados\Pc conector\rustup-home\toolchains\stable-x86_64-pc-windows-gnu\bin;" +
-            "F:\msys64\usr\bin;" +
+$env:CC          = "F:\msys64\mingw64\bin\gcc.exe"
+$env:CXX         = "F:\msys64\mingw64\bin\g++.exe"
+$env:AR          = "F:\msys64\mingw64\bin\ar.exe"
+$env:CC_x86_64_pc_windows_gnu = "F:\msys64\mingw64\bin\gcc.exe"
+
+# cmake-bin tiene un wrapper que inyecta -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+# necesario para compilar audiopus_sys (Opus) con CMake 4.x
+$env:PATH = "F:\Programas Desarrollados\Pc conector\cmake-bin;" +
             "F:\msys64\mingw64\bin;" +
+            "F:\Programas Desarrollados\Pc conector\cargo-cache\bin;" +
+            "F:\Programas Desarrollados\Pc conector\rustup-home\toolchains\stable-x86_64-pc-windows-gnu\bin;" +
             $env:PATH
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "   PC Conector - Build Script" -ForegroundColor Cyan
+Write-Host "   NetBridge - Build Script" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Cargo: $(cargo --version)" -ForegroundColor Green
 Write-Host ""

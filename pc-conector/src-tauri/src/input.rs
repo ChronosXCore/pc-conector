@@ -28,6 +28,8 @@ pub struct InputService {
     #[allow(dead_code)]
     mouse_locked: Arc<Mutex<bool>>,
     pub forwarding_active: Arc<std::sync::atomic::AtomicBool>,
+    pub center_x: Arc<std::sync::atomic::AtomicI32>,
+    pub center_y: Arc<std::sync::atomic::AtomicI32>,
 }
 
 impl InputService {
@@ -40,11 +42,15 @@ impl InputService {
             on_input: None,
             mouse_locked: Arc::new(Mutex::new(false)),
             forwarding_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            center_x: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+            center_y: Arc::new(std::sync::atomic::AtomicI32::new(0)),
         }
     }
 
-    pub fn set_forwarding_active(&self, active: bool) {
+    pub fn set_forwarding_active(&self, active: bool, cx: i32, cy: i32) {
         self.forwarding_active.store(active, std::sync::atomic::Ordering::Relaxed);
+        self.center_x.store(cx, std::sync::atomic::Ordering::Relaxed);
+        self.center_y.store(cy, std::sync::atomic::Ordering::Relaxed);
         unsafe {
             set_system_cursors_hidden(active);
         }
@@ -66,11 +72,15 @@ impl InputService {
         let callback = self.on_input.clone();
         let capturing = self.is_capturing.clone();
         let forwarding = self.forwarding_active.clone();
+        let center_x = self.center_x.clone();
+        let center_y = self.center_y.clone();
 
         thread::spawn(move || {
             let callback = callback;
             let capturing = capturing;
             let forwarding = forwarding;
+            let center_x = center_x;
+            let center_y = center_y;
 
             if let Err(e) = grab(move |event: Event| {
                 if !*capturing.lock().unwrap() {
@@ -78,11 +88,19 @@ impl InputService {
                 }
 
                 let active = forwarding.load(std::sync::atomic::Ordering::Relaxed);
+                let cx = center_x.load(std::sync::atomic::Ordering::Relaxed) as f64;
+                let cy = center_y.load(std::sync::atomic::Ordering::Relaxed) as f64;
 
                 if let Some(ref cb) = callback {
                     let input_event = match event.event_type {
                         EventType::MouseMove { x, y } => {
-                            Some(InputEvent::MouseMove { x, y })
+                            if active {
+                                let dx = x - cx;
+                                let dy = y - cy;
+                                Some(InputEvent::MouseMove { x: dx, y: dy })
+                            } else {
+                                Some(InputEvent::MouseMove { x, y })
+                            }
                         }
                         EventType::ButtonPress(button) => {
                             Some(InputEvent::MousePress { button: rdev_button_to_u8(button) })
@@ -113,10 +131,7 @@ impl InputService {
                 }
 
                 if active {
-                    match event.event_type {
-                        EventType::MouseMove { .. } => Some(event),
-                        _ => None,
-                    }
+                    None
                 } else {
                     Some(event)
                 }

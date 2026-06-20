@@ -10,13 +10,27 @@ use clipboard::ClipboardSync;
 use config::{AppConfig, LinkedDevice};
 use discovery::DiscoveryService;
 use input::{InputService, InputEvent};
-use network::{NetworkManager, NetworkMessage, ScreenInfo};
+use network::{NetworkManager, NetworkMessage, ScreenInfo, PeerMetadata};
 use log::{info, warn, error};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Manager;
 use tauri::Emitter;
 use tauri::tray::TrayIconBuilder;
+
+// ───────────────────────────────────────────────────────────────────────────
+// KvmState enum
+// ───────────────────────────────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum KvmState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Transferring,
+    RemoteControl,
+    RemoteControlled,
+    LocalRecovery,
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Virtual layout entry: a screen (local OR remote) placed on the shared canvas
@@ -59,6 +73,10 @@ pub struct AppState {
     pub last_mouse_pos: Arc<Mutex<(f64, f64)>>,
     /// Instant until which mouse events are ignored after a warp (prevents snap loop)
     pub warp_cooldown_until: Arc<Mutex<std::time::Instant>>,
+    pub kvm_state: Arc<Mutex<KvmState>>,
+    pub remote_metadata: Arc<Mutex<std::collections::HashMap<String, PeerMetadata>>>,
+    pub last_heartbeat_received: Arc<Mutex<std::time::Instant>>,
+    pub remote_cursor_pos: Arc<Mutex<(f64, f64)>>,
 }
 
 impl AppState {
@@ -80,6 +98,10 @@ impl AppState {
             forwarding_to: Arc::new(Mutex::new(None)),
             last_mouse_pos: Arc::new(Mutex::new((0.0, 0.0))),
             warp_cooldown_until: Arc::new(Mutex::new(std::time::Instant::now())),
+            kvm_state: Arc::new(Mutex::new(KvmState::Disconnected)),
+            remote_metadata: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            last_heartbeat_received: Arc::new(Mutex::new(std::time::Instant::now())),
+            remote_cursor_pos: Arc::new(Mutex::new((0.5, 0.5))),
         }
     }
 }
@@ -168,10 +190,70 @@ const EDGE_PX: f64 = 2.0;
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum CrossDir { Right, Left, Down, Up }
 
+fn find_screen_at_coords(x: f64, y: f64, layout: &[VirtualScreen]) -> Option<VirtualScreen> {
+    for screen in layout {
+        let sx = screen.x as f64;
+        let sy = screen.y as f64;
+        let sw = screen.width as f64;
+        let sh = screen.height as f64;
+        if x >= sx && x < sx + sw && y >= sy && y < sy + sh {
+            return Some(screen.clone());
+        }
+    }
+    None
+}
+
+fn find_adjacent_screen(layout: &[VirtualScreen], current: &VirtualScreen, dir: CrossDir) -> Option<VirtualScreen> {
+    let cx = current.x as f64;
+    let cy = current.y as f64;
+    let cw = current.width as f64;
+    let ch = current.height as f64;
+    let tolerance = 300.0;
+    
+    let mut best: Option<VirtualScreen> = None;
+    let mut best_dist = f64::MAX;
+    
+    for vs in layout {
+        if vs.id == current.id { continue; }
+        let rx = vs.x as f64;
+        let ry = vs.y as f64;
+        let rw = vs.width as f64;
+        let rh = vs.height as f64;
+        
+        let (adjacent, dist) = match dir {
+            CrossDir::Right => {
+                let d = (rx - (cx + cw)).abs();
+                let overlap = (cy + ch).min(ry + rh) - cy.max(ry);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+            CrossDir::Left => {
+                let d = ((rx + rw) - cx).abs();
+                let overlap = (cy + ch).min(ry + rh) - cy.max(ry);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+            CrossDir::Down => {
+                let d = (ry - (cy + ch)).abs();
+                let overlap = (cx + cw).min(rx + rw) - cx.max(rx);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+            CrossDir::Up => {
+                let d = ((ry + rh) - cy).abs();
+                let overlap = (cx + cw).min(rx + rw) - cx.max(rx);
+                (overlap > 0.0 && d < tolerance, d)
+            }
+        };
+        
+        if adjacent && dist < best_dist {
+            best_dist = dist;
+            best = Some(vs.clone());
+        }
+    }
+    best
+}
+
 /// Find if the cursor (x, y) is at the edge of a local screen AND a remote screen
 /// is adjacent in that direction in the virtual layout.
-fn find_remote_at_edge(x: f64, y: f64, layout: &[VirtualScreen]) -> Option<(String, f64, f64)> {
-    // Find which local screen the cursor is on (or nearest to)
+fn find_remote_at_edge(x: f64, y: f64, layout: &[VirtualScreen]) -> Option<(VirtualScreen, f64, f64)> {
     let local_screens: Vec<&VirtualScreen> = layout.iter().filter(|v| v.owner == "local").collect();
     if local_screens.is_empty() { return None; }
 
@@ -181,10 +263,8 @@ fn find_remote_at_edge(x: f64, y: f64, layout: &[VirtualScreen]) -> Option<(Stri
         let lw = local.width as f64;
         let lh = local.height as f64;
 
-        // Must be within this local screen's bounds
         if x < lx || x >= lx + lw || y < ly || y >= ly + lh { continue; }
 
-        // Check all 4 edges
         let edges = [
             (x >= lx + lw - EDGE_PX, CrossDir::Right,  lx + lw, ly, lh, true),
             (x <  lx + EDGE_PX,      CrossDir::Left,   lx,       ly, lh, false),
@@ -194,80 +274,26 @@ fn find_remote_at_edge(x: f64, y: f64, layout: &[VirtualScreen]) -> Option<(Stri
 
         for (at_edge, dir, _edge_coord, perp_start, perp_size, _positive) in &edges {
             if !at_edge { continue; }
-            // Find a remote screen adjacent in that direction
-            if let Some(rem) = find_adjacent_remote(layout, local, *dir) {
-                // Normalised position: axis perpendicular to crossover direction
-                let (nx, ny) = match dir {
-                    CrossDir::Right | CrossDir::Left => {
-                        let perp = (y - *perp_start).clamp(0.0, *perp_size - 1.0) / *perp_size;
-                        // Enter remote screen: x at its opposite edge
-                        let enter_x = if *dir == CrossDir::Right { 0.0 } else { 1.0 };
-                        (enter_x, perp)
-                    }
-                    CrossDir::Down | CrossDir::Up => {
-                        let perp = (x - *perp_start).clamp(0.0, *perp_size - 1.0) / *perp_size;
-                        let enter_y = if *dir == CrossDir::Down { 0.0 } else { 1.0 };
-                        (perp, enter_y)
-                    }
-                };
-                return Some((rem.owner.clone(), nx, ny));
+            if let Some(rem) = find_adjacent_screen(layout, local, *dir) {
+                if rem.owner != "local" {
+                    let (nx, ny) = match dir {
+                        CrossDir::Right | CrossDir::Left => {
+                            let perp = (y - *perp_start).clamp(0.0, *perp_size - 1.0) / *perp_size;
+                            let enter_x = if *dir == CrossDir::Right { 0.0 } else { 1.0 };
+                            (enter_x, perp)
+                        }
+                        CrossDir::Down | CrossDir::Up => {
+                            let perp = (x - *perp_start).clamp(0.0, *perp_size - 1.0) / *perp_size;
+                            let enter_y = if *dir == CrossDir::Down { 0.0 } else { 1.0 };
+                            (perp, enter_y)
+                        }
+                    };
+                    return Some((rem.clone(), nx, ny));
+                }
             }
         }
     }
     None
-}
-
-/// Find a remote VirtualScreen that is adjacent to `local` in the given direction.
-fn find_adjacent_remote<'a>(layout: &'a [VirtualScreen], local: &VirtualScreen, dir: CrossDir) -> Option<&'a VirtualScreen> {
-    // Adjacency: the remote screen's near edge overlaps or touches the local's far edge,
-    // and they share some vertical/horizontal band.
-    let lx = local.x as f64;
-    let ly = local.y as f64;
-    let lw = local.width as f64;
-    let lh = local.height as f64;
-    let tolerance = 300.0; // px tolerance for "aligned" edges
-
-    let mut best: Option<&VirtualScreen> = None;
-    let mut best_dist = f64::MAX;
-
-    for vs in layout {
-        if vs.owner == "local" { continue; }
-        let rx = vs.x as f64;
-        let ry = vs.y as f64;
-        let rw = vs.width as f64;
-        let rh = vs.height as f64;
-
-        let (adjacent, dist) = match dir {
-            CrossDir::Right => {
-                // Remote left edge near local right edge
-                let d = (rx - (lx + lw)).abs();
-                // Vertical overlap
-                let overlap = (ly + lh).min(ry + rh) - ly.max(ry);
-                (overlap > 0.0 && d < tolerance, d)
-            }
-            CrossDir::Left => {
-                let d = ((rx + rw) - lx).abs();
-                let overlap = (ly + lh).min(ry + rh) - ly.max(ry);
-                (overlap > 0.0 && d < tolerance, d)
-            }
-            CrossDir::Down => {
-                let d = (ry - (ly + lh)).abs();
-                let overlap = (lx + lw).min(rx + rw) - lx.max(rx);
-                (overlap > 0.0 && d < tolerance, d)
-            }
-            CrossDir::Up => {
-                let d = ((ry + rh) - ly).abs();
-                let overlap = (lx + lw).min(rx + rw) - lx.max(rx);
-                (overlap > 0.0 && d < tolerance, d)
-            }
-        };
-
-        if adjacent && dist < best_dist {
-            best_dist = dist;
-            best = Some(vs);
-        }
-    }
-    best
 }
 
 /// Returns the primary local screen from the virtual layout, or None
@@ -279,59 +305,113 @@ fn primary_local_screen(layout: &[VirtualScreen]) -> Option<&VirtualScreen> {
 /// Called on every mouse-move event from rdev. Checks edge-crossing and
 /// decides whether to forward to remote or keep local.
 fn handle_mouse_move(x: f64, y: f64, state: &AppState) {
-    // Skip events arriving during warp cooldown to prevent snap-back loop
-    {
+    let currently_forwarding = state.forwarding_to.lock().unwrap().clone();
+    
+    if currently_forwarding.is_none() {
         let cooldown = *state.warp_cooldown_until.lock().unwrap();
         if std::time::Instant::now() < cooldown {
             return;
         }
     }
 
-    *state.last_mouse_pos.lock().unwrap() = (x, y);
+    if currently_forwarding.is_none() {
+        *state.last_mouse_pos.lock().unwrap() = (x, y);
+    }
 
     let layout = state.virtual_layout.lock().unwrap().clone();
     if layout.is_empty() {
         return;
     }
 
-    let currently_forwarding = state.forwarding_to.lock().unwrap().clone();
-
     if let Some(ref peer_ip) = currently_forwarding {
-        // We are forwarding — send cursor movement to remote.
-        // The cursor is kept at center of the local screen via snap,
-        // so any movement from center represents user intent.
-        let local_screens: Vec<&VirtualScreen> = layout.iter().filter(|v| v.owner == "local").collect();
-        let primary = local_screens.iter()
-            .find(|v| v.is_primary)
-            .or_else(|| local_screens.first())
-            .copied();
+        let dx = x;
+        let dy = y;
 
-        if let Some(local) = primary {
-            let lw = local.width as f64;
-            let lh = local.height as f64;
-            let lx = local.x as f64;
-            let ly = local.y as f64;
-            let center_x = lx + lw / 2.0;
-            let center_y = ly + lh / 2.0;
+        let (canvas_x, canvas_y) = {
+            *state.remote_cursor_pos.lock().unwrap()
+        };
 
-            // Delta from center — this is what the user actually moved
-            let dx = x - center_x;
-            let dy = y - center_y;
+        let mut new_canvas_x = canvas_x + dx;
+        let mut new_canvas_y = canvas_y + dy;
 
-            // If the user moved the cursor significantly away from center,
-            // they want to move on the remote screen
-            if dx.abs() > 1.0 || dy.abs() > 1.0 {
-                // Re-snap cursor to center with cooldown
-                *state.warp_cooldown_until.lock().unwrap() =
-                    std::time::Instant::now() + std::time::Duration::from_millis(80);
+        let current_screen = find_screen_at_coords(canvas_x, canvas_y, &layout)
+            .unwrap_or_else(|| {
+                layout.iter()
+                    .find(|s| s.owner == *peer_ip)
+                    .cloned()
+                    .unwrap_or_else(|| layout[0].clone())
+            });
+
+        let mut target_screen = find_screen_at_coords(new_canvas_x, new_canvas_y, &layout);
+
+        if target_screen.is_none() {
+            let mut dir = None;
+            if new_canvas_x < current_screen.x as f64 {
+                dir = Some(CrossDir::Left);
+            } else if new_canvas_x >= (current_screen.x + current_screen.width as i32) as f64 {
+                dir = Some(CrossDir::Right);
+            } else if new_canvas_y < current_screen.y as f64 {
+                dir = Some(CrossDir::Up);
+            } else if new_canvas_y >= (current_screen.y + current_screen.height as i32) as f64 {
+                dir = Some(CrossDir::Down);
+            }
+
+            if let Some(d) = dir {
+                if let Some(adj) = find_adjacent_screen(&layout, &current_screen, d) {
+                    target_screen = Some(adj.clone());
+                    match d {
+                        CrossDir::Left => {
+                            new_canvas_x = (adj.x + adj.width as i32 - 1) as f64;
+                        }
+                        CrossDir::Right => {
+                            new_canvas_x = adj.x as f64;
+                        }
+                        CrossDir::Up => {
+                            new_canvas_y = (adj.y + adj.height as i32 - 1) as f64;
+                        }
+                        CrossDir::Down => {
+                            new_canvas_y = adj.y as f64;
+                        }
+                    }
+                } else {
+                    new_canvas_x = new_canvas_x.clamp(current_screen.x as f64, (current_screen.x + current_screen.width as i32 - 1) as f64);
+                    new_canvas_y = new_canvas_y.clamp(current_screen.y as f64, (current_screen.y + current_screen.height as i32 - 1) as f64);
+                    target_screen = Some(current_screen.clone());
+                }
+            } else {
+                target_screen = Some(current_screen.clone());
+            }
+        }
+
+        if let Some(ref target) = target_screen {
+            if target.owner == "local" {
+                info!("Cursor regresó a PC local en canvas ({}, {})", new_canvas_x, new_canvas_y);
+                *state.forwarding_to.lock().unwrap() = None;
+                *state.cursor_on_remote.lock().unwrap() = false;
+                *state.kvm_state.lock().unwrap() = KvmState::Connected;
+                
                 if let Some(ref svc) = *state.input_service.lock().unwrap() {
-                    let _ = svc.warp_mouse(center_x as i32, center_y as i32);
+                    svc.set_forwarding_active(false, 0, 0);
+                    let _ = svc.warp_mouse(new_canvas_x as i32, new_canvas_y as i32);
                 }
 
-                // Send delta as normalised position within the remote screen
-                // We accumulate deltas: normalize by screen size to get 0..1 movement
-                let nx = (0.5 + dx / lw).clamp(0.0, 1.0);
-                let ny = (0.5 + dy / lh).clamp(0.0, 1.0);
+                let conn_addr = {
+                    let conns = state.connections.lock().unwrap();
+                    conns.keys().find(|k| k.starts_with(peer_ip)).cloned()
+                };
+                if let Some(addr) = conn_addr {
+                    send_to_peer(&addr, NetworkMessage::CursorReturn, state);
+                }
+
+                if let Some(ref handle) = *state.app_handle.lock().unwrap() {
+                    let _ = handle.emit("cursor-returned-local", ());
+                }
+            } else if target.owner == *peer_ip {
+                *state.remote_cursor_pos.lock().unwrap() = (new_canvas_x, new_canvas_y);
+
+                let nx = (new_canvas_x - target.x as f64).clamp(0.0, target.width as f64 - 1.0) / target.width as f64;
+                let ny = (new_canvas_y - target.y as f64).clamp(0.0, target.height as f64 - 1.0) / target.height as f64;
+
                 let msg = NetworkMessage::MouseEvent(network::MouseData {
                     event_type: network::MouseEventType::Move,
                     x: nx,
@@ -339,51 +419,41 @@ fn handle_mouse_move(x: f64, y: f64, state: &AppState) {
                     button: None,
                     scroll_delta: None,
                 });
-                send_to_peer(peer_ip, msg, state);
+
+                let conn_addr = {
+                    let conns = state.connections.lock().unwrap();
+                    conns.keys().find(|k| k.starts_with(peer_ip)).cloned()
+                };
+                if let Some(addr) = conn_addr {
+                    send_to_peer(&addr, msg, state);
+                }
             }
         }
         return;
     }
 
-    // Not forwarding — check if cursor hit an edge with an adjacent remote screen
-    if let Some((peer_ip, nx, ny)) = find_remote_at_edge(x, y, &layout) {
-        // Transition: start forwarding to peer
-        info!("Cursor cruzó borde hacia pantalla remota de {}", peer_ip);
+    if let Some((target_screen, nx, ny)) = find_remote_at_edge(x, y, &layout) {
+        let peer_ip = target_screen.owner.clone();
+        info!("Cursor cruzó borde, solicitando transferencia a {}", peer_ip);
 
-        // Snap cursor to center FIRST with cooldown, before we start forwarding
-        // This prevents the warp event from being processed as a new crossover
-        if let Some(local) = primary_local_screen(&layout) {
-            let center_x = local.x + (local.width as i32 / 2);
-            let center_y = local.y + (local.height as i32 / 2);
-            // Set cooldown BEFORE the warp so the warp event is ignored
-            *state.warp_cooldown_until.lock().unwrap() =
-                std::time::Instant::now() + std::time::Duration::from_millis(150);
-            if let Some(ref svc) = *state.input_service.lock().unwrap() {
-                let _ = svc.warp_mouse(center_x, center_y);
-            }
+        *state.kvm_state.lock().unwrap() = KvmState::Transferring;
+
+        let canvas_x = target_screen.x as f64 + nx * target_screen.width as f64;
+        let canvas_y = target_screen.y as f64 + ny * target_screen.height as f64;
+        *state.remote_cursor_pos.lock().unwrap() = (canvas_x, canvas_y);
+
+        let msg = NetworkMessage::TransferRequest {
+            target_x: nx,
+            target_y: ny,
+        };
+        
+        let conn_addr = {
+            let conns = state.connections.lock().unwrap();
+            conns.keys().find(|k| k.starts_with(&peer_ip)).cloned()
+        };
+        if let Some(addr) = conn_addr {
+            send_to_peer(&addr, msg, state);
         }
-
-        // Now set forwarding state
-        *state.forwarding_to.lock().unwrap() = Some(peer_ip.clone());
-        *state.cursor_on_remote.lock().unwrap() = true;
-        if let Some(ref svc) = *state.input_service.lock().unwrap() {
-            svc.set_forwarding_active(true);
-        }
-
-        // Notify frontend
-        if let Some(ref handle) = *state.app_handle.lock().unwrap() {
-            let _ = handle.emit("cursor-on-remote", peer_ip.clone());
-        }
-
-        // Send initial move to remote
-        let msg = NetworkMessage::MouseEvent(network::MouseData {
-            event_type: network::MouseEventType::Move,
-            x: nx,
-            y: ny,
-            button: None,
-            scroll_delta: None,
-        });
-        send_to_peer(&peer_ip, msg, state);
     }
 }
 
@@ -576,7 +646,7 @@ fn handle_incoming_message(msg: NetworkMessage, state: &AppState, peer_addr: &st
                 *state.forwarding_to.lock().unwrap() = None;
                 *state.cursor_on_remote.lock().unwrap() = false;
                 if let Some(ref svc) = *state.input_service.lock().unwrap() {
-                    svc.set_forwarding_active(false);
+                    svc.set_forwarding_active(false, 0, 0);
                 }
                 // Place cursor at center of the local screen so user can continue
                 let layout = state.virtual_layout.lock().unwrap().clone();
@@ -590,6 +660,85 @@ fn handle_incoming_message(msg: NetworkMessage, state: &AppState, peer_addr: &st
                 if let Some(ref handle) = *state.app_handle.lock().unwrap() {
                     let _ = handle.emit("cursor-returned-local", ());
                 }
+            }
+        }
+        NetworkMessage::Handshake { metadata, security_token: _ } => {
+            let clean_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            info!("Recibido Handshake de {}: OS={}, Server={}, Res={}", clean_ip, metadata.os, metadata.display_server, metadata.resolution);
+            state.remote_metadata.lock().unwrap().insert(clean_ip.clone(), metadata);
+            *state.kvm_state.lock().unwrap() = KvmState::Connected;
+            
+            // Responder con HandshakeAck
+            let local_meta = get_local_metadata();
+            let msg = NetworkMessage::HandshakeAck { metadata: local_meta };
+            send_to_peer(&clean_ip, msg, state);
+        }
+        NetworkMessage::HandshakeAck { metadata } => {
+            let clean_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            info!("Recibido HandshakeAck de {}: OS={}, Server={}, Res={}", clean_ip, metadata.os, metadata.display_server, metadata.resolution);
+            state.remote_metadata.lock().unwrap().insert(clean_ip, metadata);
+            *state.kvm_state.lock().unwrap() = KvmState::Connected;
+        }
+        NetworkMessage::Heartbeat => {
+            *state.last_heartbeat_received.lock().unwrap() = std::time::Instant::now();
+            let clean_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            let msg = NetworkMessage::HeartbeatAck;
+            send_to_peer(&clean_ip, msg, state);
+        }
+        NetworkMessage::HeartbeatAck => {
+            *state.last_heartbeat_received.lock().unwrap() = std::time::Instant::now();
+        }
+        NetworkMessage::TransferRequest { target_x, target_y } => {
+            let clean_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            info!("Recibida petición de transferencia de {} a ({}, {})", clean_ip, target_x, target_y);
+            
+            // Cambiar estado a RemoteControlled (estamos siendo controlados remotamente)
+            *state.kvm_state.lock().unwrap() = KvmState::RemoteControlled;
+            
+            // Simular ratón en las coordenadas indicadas (coordenadas relativas 0..1)
+            let local_screens = collect_local_screens();
+            if let Some(primary) = local_screens.iter().find(|s| s.is_primary).or(local_screens.first()) {
+                let abs_x = primary.x as f64 + target_x * primary.width as f64;
+                let abs_y = primary.y as f64 + target_y * primary.height as f64;
+                if let Some(ref input) = *state.input_service.lock().unwrap() {
+                    let _ = input.warp_mouse(abs_x as i32, abs_y as i32);
+                }
+            }
+            
+            // Responder con TransferAck
+            let msg = NetworkMessage::TransferAck { ready: true };
+            send_to_peer(&clean_ip, msg, state);
+        }
+        NetworkMessage::TransferAck { ready } => {
+            let clean_ip = peer_addr.split(':').next().unwrap_or(peer_addr).to_string();
+            info!("Recibido TransferAck de {}: ready={}", clean_ip, ready);
+            if ready {
+                *state.kvm_state.lock().unwrap() = KvmState::RemoteControl;
+                *state.forwarding_to.lock().unwrap() = Some(clean_ip.clone());
+                *state.cursor_on_remote.lock().unwrap() = true;
+                
+                let layout = state.virtual_layout.lock().unwrap().clone();
+                let local_screens: Vec<&VirtualScreen> = layout.iter().filter(|v| v.owner == "local").collect();
+                let primary = local_screens.iter()
+                    .find(|v| v.is_primary)
+                    .or_else(|| local_screens.first())
+                    .copied();
+
+                if let Some(local) = primary {
+                    let cx = local.x + (local.width as i32 / 2);
+                    let cy = local.y + (local.height as i32 / 2);
+                    
+                    if let Some(ref svc) = *state.input_service.lock().unwrap() {
+                        let _ = svc.warp_mouse(cx, cy);
+                        svc.set_forwarding_active(true, cx, cy);
+                    }
+                }
+                
+                if let Some(ref handle) = *state.app_handle.lock().unwrap() {
+                    let _ = handle.emit("cursor-on-remote", clean_ip.clone());
+                }
+            } else {
+                *state.kvm_state.lock().unwrap() = KvmState::Connected;
             }
         }
         _ => {}
@@ -723,6 +872,105 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                                     info!("Autenticación exitosa con {} ({})", peer_host, addr);
                                     authenticated = true;
                                     
+                                    // Cambiar estado a Connecting
+                                    *state.kvm_state.lock().unwrap() = KvmState::Connecting;
+                                    
+                                    // Enviar Handshake al peer recién autenticado
+                                    let local_meta = get_local_metadata();
+                                    let handshake_msg = NetworkMessage::Handshake {
+                                        metadata: local_meta,
+                                        security_token: expected_token.clone(),
+                                    };
+                                    let conn_handshake = conn.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        if let Ok(bytes) = serde_json::to_vec(&handshake_msg) {
+                                            if let Ok(mut send) = conn_handshake.open_uni().await {
+                                                let _ = send.write_all(&bytes).await;
+                                                let _ = send.finish();
+                                            }
+                                        }
+                                    });
+
+                                    // Iniciar loop de Heartbeat
+                                    let conn_heartbeat = conn.clone();
+                                    let state_heartbeat = state.clone();
+                                    let peer_addr_heartbeat = addr.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        info!("Iniciando loop de heartbeat para {}", peer_addr_heartbeat);
+                                        loop {
+                                            let connected = {
+                                                let conns = state_heartbeat.connections.lock().unwrap();
+                                                conns.contains_key(&peer_addr_heartbeat)
+                                            };
+                                            if !connected {
+                                                break;
+                                            }
+                                            
+                                            let msg = NetworkMessage::Heartbeat;
+                                            if let Ok(bytes) = serde_json::to_vec(&msg) {
+                                                if let Ok(mut send) = conn_heartbeat.open_uni().await {
+                                                    let _ = send.write_all(&bytes).await;
+                                                    let _ = send.finish();
+                                                }
+                                            }
+                                            
+                                            tokio::time::sleep(Duration::from_millis(100)).await;
+                                        }
+                                        info!("Bucle de heartbeat finalizado para {}", peer_addr_heartbeat);
+                                    });
+
+                                    // Iniciar Watchdog de recuperación local
+                                    let state_watchdog = state.clone();
+                                    let peer_addr_watchdog = addr.clone();
+                                    let clean_ip_watchdog = clean_ip.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        info!("Iniciando watchdog de recuperación para {}", peer_addr_watchdog);
+                                        *state_watchdog.last_heartbeat_received.lock().unwrap() = std::time::Instant::now();
+                                        
+                                        loop {
+                                            tokio::time::sleep(Duration::from_millis(100)).await;
+                                            
+                                            let connected = {
+                                                let conns = state_watchdog.connections.lock().unwrap();
+                                                conns.contains_key(&peer_addr_watchdog)
+                                            };
+                                            if !connected {
+                                                break;
+                                            }
+                                            
+                                            let elapsed = {
+                                                let last = state_watchdog.last_heartbeat_received.lock().unwrap();
+                                                std::time::Instant::now().duration_since(*last)
+                                            };
+                                            
+                                            if elapsed > Duration::from_millis(300) {
+                                                warn!("¡Watchdog KVM activado! Sin latido del peer {} en {}ms. Iniciando recuperación local...", clean_ip_watchdog, elapsed.as_millis());
+                                                
+                                                *state_watchdog.kvm_state.lock().unwrap() = KvmState::LocalRecovery;
+                                                *state_watchdog.forwarding_to.lock().unwrap() = None;
+                                                *state_watchdog.cursor_on_remote.lock().unwrap() = false;
+                                                
+                                                if let Some(ref svc) = *state_watchdog.input_service.lock().unwrap() {
+                                                    svc.set_forwarding_active(false, 0, 0);
+                                                }
+                                                
+                                                {
+                                                    let mut conns = state_watchdog.connections.lock().unwrap();
+                                                    conns.remove(&peer_addr_watchdog);
+                                                }
+                                                state_watchdog.remote_screens.lock().unwrap().remove(&clean_ip_watchdog);
+                                                state_watchdog.remote_audio_devices.lock().unwrap().remove(&clean_ip_watchdog);
+                                                
+                                                emit_connections_changed(&state_watchdog);
+                                                rebuild_virtual_layout(&state_watchdog);
+                                                
+                                                *state_watchdog.kvm_state.lock().unwrap() = KvmState::Disconnected;
+                                                break;
+                                            }
+                                        }
+                                        info!("Watchdog de recuperación finalizado para {}", peer_addr_watchdog);
+                                    });
+                                    
                                     // Agregar automáticamente a dispositivos vinculados (linked_devices) de forma bidireccional
                                     {
                                         let mut config = state.config.lock().unwrap();
@@ -803,7 +1051,7 @@ fn start_receive_loop(conn: quinn::Connection, state: AppState, addr: String, is
                     *state.forwarding_to.lock().unwrap() = None;
                     *state.cursor_on_remote.lock().unwrap() = false;
                     if let Some(ref svc) = *state.input_service.lock().unwrap() {
-                        svc.set_forwarding_active(false);
+                        svc.set_forwarding_active(false, 0, 0);
                     }
                     emit_connections_changed(&state);
                     rebuild_virtual_layout(&state);
@@ -1233,7 +1481,7 @@ fn disconnect_from_peer(addr: String, state: tauri::State<AppState>) -> Result<(
         *state.forwarding_to.lock().unwrap() = None;
         *state.cursor_on_remote.lock().unwrap() = false;
         if let Some(ref svc) = *state.input_service.lock().unwrap() {
-            svc.set_forwarding_active(false);
+            svc.set_forwarding_active(false, 0, 0);
         }
     }
     emit_connections_changed(&state);
@@ -1254,7 +1502,7 @@ fn disconnect(state: tauri::State<AppState>) -> Result<(), String> {
     *state.forwarding_to.lock().unwrap() = None;
     *state.cursor_on_remote.lock().unwrap() = false;
     if let Some(ref svc) = *state.input_service.lock().unwrap() {
-        svc.set_forwarding_active(false);
+        svc.set_forwarding_active(false, 0, 0);
     }
     emit_connections_changed(&state);
     rebuild_virtual_layout(&state);
@@ -1789,6 +2037,38 @@ fn collect_local_screens() -> Vec<ScreenInfo> {
     }
 }
 
+fn get_local_metadata() -> PeerMetadata {
+    let screens = collect_local_screens();
+    let monitors = screens.len() as u32;
+    let primary = screens.iter().find(|s| s.is_primary).or(screens.first());
+    let resolution = match primary {
+        Some(s) => format!("{}x{}", s.width, s.height),
+        None => "1920x1080".to_string(),
+    };
+    
+    let scale = 1.0;
+
+    let os = if cfg!(target_os = "windows") { "windows" } else { "linux" }.to_string();
+    let display_server = if cfg!(target_os = "windows") {
+        "windows".to_string()
+    } else {
+        if std::env::var("WAYLAND_DISPLAY").is_ok() {
+            "wayland".to_string()
+        } else {
+            "x11".to_string()
+        }
+    };
+
+    PeerMetadata {
+        os,
+        version: whoami::fallible::hostname().unwrap_or_else(|_| "Desconocido".to_string()),
+        resolution,
+        scale,
+        monitors,
+        display_server,
+    }
+}
+
 // ===== DEVICE LINKING COMMANDS =====
 
 #[tauri::command]
@@ -1897,7 +2177,7 @@ fn set_cursor_on_remote(value: bool, state: tauri::State<AppState>) {
     if !value {
         *state.forwarding_to.lock().unwrap() = None;
         if let Some(ref svc) = *state.input_service.lock().unwrap() {
-            svc.set_forwarding_active(false);
+            svc.set_forwarding_active(false, 0, 0);
         }
     }
 }

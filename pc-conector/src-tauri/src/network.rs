@@ -19,6 +19,16 @@ pub struct ScreenInfo {
     pub is_primary: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerMetadata {
+    pub os: String,
+    pub version: String,
+    pub resolution: String,
+    pub scale: f64,
+    pub monitors: u32,
+    pub display_server: String,
+}
+
 /// Tipos de mensajes que se pueden enviar entre peers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkMessage {
@@ -47,6 +57,12 @@ pub enum NetworkMessage {
     CursorReturn,
     Ping,
     Pong,
+    Handshake { metadata: PeerMetadata, security_token: String },
+    HandshakeAck { metadata: PeerMetadata },
+    TransferRequest { target_x: f64, target_y: f64 },
+    TransferAck { ready: bool },
+    Heartbeat,
+    HeartbeatAck,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

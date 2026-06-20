@@ -38,6 +38,17 @@ impl DiscoveryService {
         }
         *running_guard = true;
 
+        // Detect local IPs to avoid discovering ourselves
+        let mut local_ips = vec!["127.0.0.1".to_string(), "0.0.0.0".to_string()];
+        if let Ok(interfaces) = get_if_addrs::get_if_addrs() {
+            for iface in interfaces {
+                if let std::net::IpAddr::V4(ip) = iface.ip() {
+                    local_ips.push(ip.to_string());
+                }
+            }
+        }
+        let local_ips = Arc::new(local_ips);
+
         // 1. INICIAR mDNS DISCOVERY
         if let Ok(mdns) = ServiceDaemon::new() {
             let service_info = ServiceInfo::new(
@@ -54,26 +65,33 @@ impl DiscoveryService {
                     info!("Servicio mDNS registrado: {} en puerto {}", hostname, port);
                     if let Ok(receiver) = mdns.browse(self.service_type) {
                         let peers_clone = self.peers.clone();
+                        let local_ips_mdns = local_ips.clone();
                         std::thread::spawn(move || {
                             for event in receiver {
                                 match event {
                                     ServiceEvent::ServiceResolved(info) => {
                                         let name = info.get_hostname().trim_end_matches(".local.").to_string();
+                                        let ip_address = info.get_addresses()
+                                            .iter()
+                                            .find(|addr| addr.is_ipv4())
+                                            .map(|a| a.to_string())
+                                            .unwrap_or_else(|| {
+                                                info.get_addresses()
+                                                    .iter()
+                                                    .next()
+                                                    .map(|a| a.to_string())
+                                                    .unwrap_or_default()
+                                            });
+
+                                        if local_ips_mdns.contains(&ip_address) {
+                                            continue;
+                                        }
+
                                         let peer = PeerInfo {
                                             id: info.get_fullname().to_string(),
                                             name: name.clone(),
                                             hostname: name,
-                                            ip_address: info.get_addresses()
-                                                .iter()
-                                                .find(|addr| addr.is_ipv4())
-                                                .map(|a| a.to_string())
-                                                .unwrap_or_else(|| {
-                                                    info.get_addresses()
-                                                        .iter()
-                                                        .next()
-                                                        .map(|a| a.to_string())
-                                                        .unwrap_or_default()
-                                                }),
+                                            ip_address,
                                             port: info.get_port(),
                                             os: String::new(),
                                             version: String::new(),
@@ -107,6 +125,7 @@ impl DiscoveryService {
         let peers_udp = self.peers.clone();
         let running_clone = self.running.clone();
         let hostname_str = hostname.to_string();
+        let local_ips_udp = local_ips.clone();
 
         // Spawnea receptor UDP
         std::thread::spawn(move || {
@@ -118,7 +137,11 @@ impl DiscoveryService {
                         let msg = String::from_utf8_lossy(&buf[..len]).trim().to_string();
                         let src_ip = src.ip().to_string();
 
-                        // Ignorar paquetes de nosotros mismos si es posible
+                        // Ignorar paquetes de nosotros mismos
+                        if local_ips_udp.contains(&src_ip) {
+                            continue;
+                        }
+
                         if msg.starts_with("NETBRIDGE_PING:") {
                             let remote_host = msg.trim_start_matches("NETBRIDGE_PING:").to_string();
                             

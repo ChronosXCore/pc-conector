@@ -21,7 +21,7 @@ export default function ConnectionRequestModal({ request, onClose }: Props) {
   const handleApprove = async () => {
     try {
       setLoading(true)
-      await invoke('approve_connection', { ip: request.ip, alwaysAllow })
+      await invoke('approve_connection', { ip: request.ip, always_allow: alwaysAllow })
       onClose()
     } catch (e) {
       console.error('Error aprobando conexión:', e)
